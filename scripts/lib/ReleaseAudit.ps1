@@ -20,6 +20,14 @@ function Invoke-ReleaseAudit {
         $lines += "- Kit validation: FAILED"
     }
 
+    try {
+        Invoke-PesterTests
+        $lines += "- Pester tests: OK"
+    } catch {
+        $errors += "Pester tests failed: $($_.Exception.Message)"
+        $lines += "- Pester tests: FAILED"
+    }
+
     $trackedFiles = @(git ls-files)
     if ($LASTEXITCODE -ne 0 -or $trackedFiles.Count -eq 0) {
         $errors += "Could not list tracked files with git ls-files."
@@ -53,6 +61,9 @@ function Invoke-ReleaseAudit {
         "generated/onboarding-report.md",
         "generated/onboarding-state.json",
         "generated/first-day-checklist.md",
+        "generated/credential-guide.md",
+        "generated/bigquery-safety-plan.md",
+        "generated/mcp-update-check.md",
         "generated/catalog-review.md",
         "generated/fixture-test-report.md",
         "generated/release-audit.md",

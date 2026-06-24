@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet("Prepare", "UseProfile", "Validate", "Doctor", "FirstDayChecklist", "OnboardingReport", "ReleaseAudit", "CatalogReview", "TestFixtures", "Prereqs", "CheckMcpUpdates", "Generate", "Apply", "Status", "Dashboard", "RunMcp", "GoogleOAuthFile", "GoogleAdcLogin", "RefreshGoogleDriveToken", "BigQueryAdcBearerToken", "ResetKit", "ResetCodexMcp", "All")]
+    [ValidateSet("Prepare", "UseProfile", "Validate", "Doctor", "CredentialGuide", "BigQuerySafetyPlan", "FirstDayChecklist", "OnboardingReport", "ReleaseAudit", "CatalogReview", "TestFixtures", "PesterTests", "Prereqs", "CheckMcpUpdates", "Generate", "Apply", "Status", "Dashboard", "RunMcp", "GoogleOAuthFile", "GoogleAdcLogin", "RefreshGoogleDriveToken", "BigQueryAdcBearerToken", "ResetKit", "ResetCodexMcp", "All")]
     [string]$Action = "Status",
 
     [ValidateSet("All", "Codex", "Claude", "Gemini")]
@@ -832,6 +832,7 @@ function Invoke-ValidateKit {
         "scripts\WebAnalystSetup.ps1",
         "scripts\lib\CatalogReview.ps1",
         "scripts\lib\FirstDayChecklist.ps1",
+        "scripts\lib\PesterTests.ps1",
         "scripts\lib\ReleaseAudit.ps1",
         "scripts\lib\TestFixtures.ps1",
         "schemas\mcp-catalog.schema.json",
@@ -839,6 +840,7 @@ function Invoke-ValidateKit {
         "schemas\tool-profiles.schema.json",
         "schemas\client-capabilities.schema.json",
         "tests\fixtures\profile-server-names.json",
+        "tests\WebAnalystSetup.Tests.ps1",
         "docs\data-and-credential-safety.md",
         "CHANGELOG.md"
     )
@@ -879,13 +881,17 @@ function Invoke-ValidateKit {
     }
 
     if ($catalog) {
-        $requiredCatalogFields = @("displayName", "kind", "trustLevel", "officialness", "authFriction", "runtime", "dataExposure", "writeCapability", "riskLevel", "lastVerified", "author", "source", "authMode", "serverName", "credentialKeys", "notes", "testPrompt")
+        $requiredCatalogFields = @("displayName", "kind", "trustLevel", "lifecycleStatus", "recommendedUse", "fallbackWhen", "knownLimitations", "officialness", "authFriction", "runtime", "dataExposure", "writeCapability", "riskLevel", "lastVerified", "author", "source", "authMode", "serverName", "credentialKeys", "notes", "testPrompt")
+        $validLifecycleStatuses = @("default", "fallback", "optional", "candidate", "private-beta", "api-fallback", "deprecated")
         foreach ($entry in $catalog.PSObject.Properties) {
             $item = $entry.Value
             foreach ($field in $requiredCatalogFields) {
                 if (-not (Test-ObjectProperty -Object $item -Name $field)) {
                     $errors += "Catalog tool '$($entry.Name)' is missing field '$field'."
                 }
+            }
+            if ((Test-ObjectProperty -Object $item -Name "lifecycleStatus") -and $validLifecycleStatuses -notcontains [string]$item.lifecycleStatus) {
+                $errors += "Catalog tool '$($entry.Name)' has invalid lifecycleStatus '$($item.lifecycleStatus)'."
             }
             if ($item.kind -eq "mcp" -and $item.transport -eq "stdio" -and -not $item.package) {
                 $errors += "Catalog tool '$($entry.Name)' is stdio MCP but has no package."
@@ -895,10 +901,13 @@ function Invoke-ValidateKit {
             }
             if ($item.providers) {
                 foreach ($provider in $item.providers.PSObject.Properties) {
-                    foreach ($field in @("displayName", "trustLevel", "officialness", "authFriction", "runtime", "dataExposure", "writeCapability", "riskLevel", "lastVerified", "authMode", "serverName", "notes", "testPrompt")) {
+                    foreach ($field in @("displayName", "trustLevel", "lifecycleStatus", "recommendedUse", "fallbackWhen", "knownLimitations", "officialness", "authFriction", "runtime", "dataExposure", "writeCapability", "riskLevel", "lastVerified", "authMode", "serverName", "notes", "testPrompt")) {
                         if (-not (Test-ObjectProperty -Object $provider.Value -Name $field)) {
                             $errors += "Catalog provider '$($entry.Name).$($provider.Name)' is missing field '$field'."
                         }
+                    }
+                    if ((Test-ObjectProperty -Object $provider.Value -Name "lifecycleStatus") -and $validLifecycleStatuses -notcontains [string]$provider.Value.lifecycleStatus) {
+                        $errors += "Catalog provider '$($entry.Name).$($provider.Name)' has invalid lifecycleStatus '$($provider.Value.lifecycleStatus)'."
                     }
                 }
             }
@@ -1262,8 +1271,96 @@ function Invoke-Prereqs {
     Invoke-CheckMcpUpdates
 }
 
+function New-McpUpdateResult {
+    param([string]$Tool, [string]$Provider, [string]$Check, [string]$Status, [string]$Detail)
+    return [PSCustomObject]@{
+        Tool = $Tool
+        Provider = $Provider
+        Check = $Check
+        Status = $Status
+        Detail = $Detail
+    }
+}
+
+function Get-CatalogFreshnessStatus {
+    param($Item)
+    $lastVerified = [DateTime]::MinValue
+    if (-not [DateTime]::TryParseExact([string]$Item.lastVerified, "yyyy-MM-dd", $null, [System.Globalization.DateTimeStyles]::None, [ref]$lastVerified)) {
+        return "Invalid lastVerified: $($Item.lastVerified)"
+    }
+    $ageDays = [int]((Get-Date) - $lastVerified).TotalDays
+    if ($ageDays -gt 180) { return "Stale: verified $ageDays days ago" }
+    if ($ageDays -gt 90) { return "Aging: verified $ageDays days ago" }
+    return "Fresh: verified $ageDays days ago"
+}
+
+function Get-McpEndpointUrl {
+    param($Item, $EnvMap)
+    $url = [string]$Item.url
+    if (-not $url -and $Item.urlEnvKey) {
+        $urlKey = [string]$Item.urlEnvKey
+        if ($EnvMap.ContainsKey($urlKey)) { $url = [string]$EnvMap[$urlKey] }
+    }
+    if (-not $url -and $Item.startArgs) {
+        $url = [string](@($Item.startArgs | Where-Object { [string]$_ -match "^https?://" } | Select-Object -First 1))
+    }
+    return $url
+}
+
+function Test-McpEndpointReachability {
+    param([string]$Url)
+    if ([string]::IsNullOrWhiteSpace($Url)) { return "No endpoint URL in catalog or env." }
+    try {
+        $response = Invoke-WebRequest -Method Head -Uri $Url -TimeoutSec 12 -MaximumRedirection 3 -UseBasicParsing
+        return "Reachable: HTTP $([int]$response.StatusCode)"
+    } catch {
+        $statusCode = $null
+        if ($_.Exception.Response -and $_.Exception.Response.StatusCode) {
+            $statusCode = [int]$_.Exception.Response.StatusCode
+            if ($statusCode -in @(401, 403, 405)) {
+                return "Endpoint responded: HTTP $statusCode (auth or method restriction expected for some MCP endpoints)"
+            }
+        }
+        try {
+            $response = Invoke-WebRequest -Method Get -Uri $Url -TimeoutSec 12 -MaximumRedirection 3 -UseBasicParsing
+            return "Reachable by GET: HTTP $([int]$response.StatusCode)"
+        } catch {
+            if ($_.Exception.Response -and $_.Exception.Response.StatusCode) {
+                $statusCode = [int]$_.Exception.Response.StatusCode
+                if ($statusCode -in @(401, 403, 405)) {
+                    return "Endpoint responded: HTTP $statusCode (auth or method restriction expected for some MCP endpoints)"
+                }
+            }
+            return "Not reachable now: $($_.Exception.Message)"
+        }
+    }
+}
+
+function Write-McpUpdateReport {
+    param($Rows)
+    New-Item -ItemType Directory -Force $GeneratedDir | Out-Null
+    $reportPath = Join-Path $GeneratedDir "mcp-update-check.md"
+    $lines = @()
+    $lines += "# MCP Update Check"
+    $lines += ""
+    $lines += "Generated: $((Get-Date).ToString("yyyy-MM-dd HH:mm:ss zzz"))"
+    $lines += ""
+    $lines += "This report checks selected MCP package freshness, remote endpoint reachability, and catalog verification age. It does not include credentials."
+    $lines += ""
+    $lines += "| Tool | Provider | Check | Status | Detail |"
+    $lines += "| --- | --- | --- | --- | --- |"
+    foreach ($row in $Rows) {
+        $detail = ([string]$row.Detail) -replace "\|", "/"
+        $lines += "| $($row.Tool) | $($row.Provider) | $($row.Check) | $($row.Status) | $detail |"
+    }
+    Set-Content -LiteralPath $reportPath -Value $lines -Encoding UTF8
+    Write-Host "Wrote MCP update report: $reportPath"
+}
+
 function Invoke-CheckMcpUpdates {
     $selectedItems = @(Get-SelectedCatalogItems | Where-Object { $_.Item.kind -eq "mcp" })
+    $envMap = Import-DotEnvMap -Path $EnvPath
+    $rows = @()
 
     Write-Step "Checking MCP package updates"
     if ($selectedItems.Count -eq 0) {
@@ -1279,19 +1376,31 @@ function Invoke-CheckMcpUpdates {
 
         $provider = [string]$item.selectedProvider
         if (-not $provider) { $provider = "default" }
+        $tool = [string]$selected.ToolName
         $label = "$($item.displayName) [$provider]"
 
-        if ($transport -eq "http") {
-            Write-Host "$label`: remote MCP; no local package to update."
-            continue
+        $freshness = Get-CatalogFreshnessStatus -Item $item
+        $freshStatus = if ($freshness -like "Fresh:*") { "OK" } elseif ($freshness -like "Aging:*") { "Review soon" } else { "Review" }
+        $rows += New-McpUpdateResult -Tool $tool -Provider $provider -Check "catalog verification" -Status $freshStatus -Detail $freshness
+
+        $endpointUrl = Get-McpEndpointUrl -Item $item -EnvMap $envMap
+        if ($transport -eq "http" -or ($item.package -and [string]$item.package -like "mcp-remote*") -or $endpointUrl) {
+            $reachability = Test-McpEndpointReachability -Url $endpointUrl
+            $reachStatus = if ($reachability -like "Reachable*" -or $reachability -like "Endpoint responded:*") { "OK" } elseif ($reachability -eq "No endpoint URL in catalog or env.") { "No URL" } else { "Check" }
+            $rows += New-McpUpdateResult -Tool $tool -Provider $provider -Check "remote endpoint" -Status $reachStatus -Detail $reachability
         }
 
         $runner = [string]$item.runner
         if (-not $runner) { $runner = "npx" }
 
+        if ($transport -eq "http" -and -not $item.package) {
+            Write-Host "$label`: remote MCP; package updates are handled by the provider."
+            continue
+        }
+
         if ($runner -eq "npx") {
             if (-not $item.package) {
-                Write-Host "$label`: npx MCP without a package value; check catalog entry."
+                $rows += New-McpUpdateResult -Tool $tool -Provider $provider -Check "npm package" -Status "Check" -Detail "npx MCP without a package value; check catalog entry."
                 continue
             }
 
@@ -1299,7 +1408,7 @@ function Invoke-CheckMcpUpdates {
                 try {
                     $npm = Resolve-Npm
                 } catch {
-                    Write-Host "$label`: npm is not available yet; run Prereqs before installing MCPs."
+                    $rows += New-McpUpdateResult -Tool $tool -Provider $provider -Check "npm package" -Status "Skipped" -Detail "npm is not available yet; run Prereqs before installing MCPs."
                     continue
                 }
             }
@@ -1312,9 +1421,10 @@ function Invoke-CheckMcpUpdates {
                 if ([string]::IsNullOrWhiteSpace($latest)) { throw "npm did not return a version" }
 
                 $mode = if ([string]$item.package -match '@latest$') { "uses @latest" } else { "not pinned to @latest" }
-                Write-Host "$label`: npm $lookupName latest $latest; configured $($item.package) ($mode)."
+                $status = if ($mode -eq "uses @latest") { "OK" } else { "Review" }
+                $rows += New-McpUpdateResult -Tool $tool -Provider $provider -Check "npm package" -Status $status -Detail "npm $lookupName latest $latest; configured $($item.package) ($mode)."
             } catch {
-                Write-Host "$label`: could not check npm package $lookupName. Verify the package source before installing."
+                $rows += New-McpUpdateResult -Tool $tool -Provider $provider -Check "npm package" -Status "Check" -Detail "Could not check npm package $lookupName. Verify the package source before installing."
             }
             continue
         }
@@ -1322,7 +1432,7 @@ function Invoke-CheckMcpUpdates {
         if ($runner -eq "pipx") {
             $python = Get-PythonCommand
             if (-not $python) {
-                Write-Host "$label`: Python/pipx fallback package $($item.package); Python is not available yet, so verify upstream before install."
+                $rows += New-McpUpdateResult -Tool $tool -Provider $provider -Check "PyPI package" -Status "Skipped" -Detail "Python is not available yet; verify upstream before install."
                 continue
             }
 
@@ -1333,15 +1443,215 @@ function Invoke-CheckMcpUpdates {
                 $latest = $null
                 if ($firstLine -and $firstLine[0] -match "\(([^)]+)\)") { $latest = $matches[1] }
                 if ([string]::IsNullOrWhiteSpace($latest)) { throw "pip did not return a version" }
-                Write-Host "$label`: pip $($item.package) latest $latest; configured $($item.package)."
+                $rows += New-McpUpdateResult -Tool $tool -Provider $provider -Check "PyPI package" -Status "OK" -Detail "pip $($item.package) latest $latest; configured $($item.package)."
             } catch {
-                Write-Host "$label`: could not check pip package $($item.package). Verify the package source before installing."
+                $rows += New-McpUpdateResult -Tool $tool -Provider $provider -Check "PyPI package" -Status "Check" -Detail "Could not check pip package $($item.package). Verify the package source before installing."
             }
             continue
         }
 
-        Write-Host "$label`: runner $runner is not covered by the update checker yet."
+        $rows += New-McpUpdateResult -Tool $tool -Provider $provider -Check "package" -Status "Skipped" -Detail "Runner $runner is not covered by the update checker yet."
     }
+
+    Write-Host (($rows | Format-Table -AutoSize | Out-String -Width 240).TrimEnd())
+    Write-McpUpdateReport -Rows $rows
+}
+
+function Get-GoogleApiLibraryUrl {
+    param([string]$Service)
+    if ([string]::IsNullOrWhiteSpace($Service)) { return "" }
+    return "https://console.cloud.google.com/apis/library/$Service"
+}
+
+function Join-MarkdownList {
+    param([object[]]$Values)
+    $items = @($Values | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+    if ($items.Count -eq 0) { return "" }
+    return ($items -join "<br>")
+}
+
+function Invoke-CredentialGuide {
+    Ensure-LocalFiles | Out-Null
+    New-Item -ItemType Directory -Force $GeneratedDir | Out-Null
+    $guidePath = Join-Path $GeneratedDir "credential-guide.md"
+    $selectedItems = @(Get-SelectedCatalogItems)
+
+    $lines = @()
+    $lines += "# Credential Setup Guide"
+    $lines += ""
+    $lines += "Generated: $((Get-Date).ToString("yyyy-MM-dd HH:mm:ss zzz"))"
+    $lines += ""
+    $lines += "This guide is generated from the selected tools. It provides direct setup URLs and names credential keys only; it does not print secret values."
+    $lines += ""
+
+    if ($selectedItems.Count -eq 0) {
+        $lines += 'No tools are enabled yet. Choose tools, then rerun `CredentialGuide`.'
+        Set-Content -LiteralPath $guidePath -Value $lines -Encoding UTF8
+        Write-Host "Wrote credential guide: $guidePath"
+        return
+    }
+
+    $googleServices = @()
+    $googleScopes = @()
+    $oauthNeeded = $false
+    $bigQuerySelected = $false
+    $rows = @()
+
+    foreach ($selected in $selectedItems) {
+        $item = $selected.Item
+        $credentialKeys = @($item.credentialKeys | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+        $optionalKeys = @($item.optionalCredentialKeys | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+        $services = @($item.requiredGoogleServices | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+        $scopes = @($item.requiredScopes | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+        $googleServices += $services
+        $googleScopes += $scopes
+        if (($credentialKeys + $optionalKeys) -match "GOOGLE_CLIENT_ID|GOOGLE_CLIENT_SECRET|GOOGLE_OAUTH_CLIENT_JSON|GOOGLE_ADC_CLIENT_JSON" -or [string]$item.authMode -match "oauth|adc") {
+            $oauthNeeded = $true
+        }
+        if ($selected.ToolName -eq "bigQuery") { $bigQuerySelected = $true }
+        $rows += [PSCustomObject]@{
+            Tool = [string]$item.displayName
+            Provider = if ($item.selectedProvider) { [string]$item.selectedProvider } else { "default" }
+            Auth = [string]$item.authMode
+            CredentialKeys = Join-MarkdownList $credentialKeys
+            OptionalKeys = Join-MarkdownList $optionalKeys
+            Services = Join-MarkdownList $services
+            Scopes = Join-MarkdownList $scopes
+        }
+    }
+
+    $googleServices = @($googleServices | Select-Object -Unique | Sort-Object)
+    $googleScopes = @($googleScopes | Select-Object -Unique | Sort-Object)
+
+    $lines += "## Direct URLs"
+    $lines += ""
+    $lines += "- Google Cloud project selector: https://console.cloud.google.com/projectselector2/home/dashboard"
+    $lines += "- Google Cloud API Library: https://console.cloud.google.com/apis/library"
+    if ($oauthNeeded) {
+        $lines += "- Google Auth Platform overview: https://console.cloud.google.com/auth/overview"
+        $lines += "- OAuth app branding: https://console.cloud.google.com/auth/branding"
+        $lines += "- OAuth audience/test users: https://console.cloud.google.com/auth/audience"
+        $lines += "- OAuth clients: https://console.cloud.google.com/auth/clients"
+        $lines += "- OAuth scopes/data access if Google asks for scope declaration: https://console.cloud.google.com/auth/scopes"
+    }
+    if ($bigQuerySelected) {
+        $lines += "- BigQuery console: https://console.cloud.google.com/bigquery"
+        $lines += "- IAM access: https://console.cloud.google.com/iam-admin/iam"
+    }
+    $lines += ""
+
+    if ($googleServices.Count -gt 0) {
+        $lines += "## Google APIs To Enable"
+        $lines += ""
+        foreach ($service in $googleServices) {
+            $lines += "- ``$service``: $(Get-GoogleApiLibraryUrl -Service $service)"
+        }
+        $lines += ""
+    }
+
+    if ($googleScopes.Count -gt 0) {
+        $lines += "## OAuth Scopes Requested By Selected Routes"
+        $lines += ""
+        foreach ($scope in $googleScopes) { $lines += "- ``$scope``" }
+        $lines += ""
+        $lines += "For local third-party Drive/Gmail MCPs, the user grants scopes during browser OAuth. The Cloud project still needs the underlying APIs enabled, but IAM roles do not replace browser OAuth scopes."
+        $lines += ""
+    }
+
+    $lines += "## Selected Tool Credential Matrix"
+    $lines += ""
+    $lines += "| Tool | Provider | Auth route | Required local keys | Optional/local helper keys | Google services | Scopes |"
+    $lines += "| --- | --- | --- | --- | --- | --- | --- |"
+    foreach ($row in $rows) {
+        $lines += "| $($row.Tool) | $($row.Provider) | $($row.Auth) | $($row.CredentialKeys) | $($row.OptionalKeys) | $($row.Services) | $($row.Scopes) |"
+    }
+    $lines += ""
+
+    $lines += "## Conversation Steps"
+    $lines += ""
+    $lines += "1. Use company-approved credentials or vault items first."
+    $lines += "2. If Google OAuth credentials are missing and the company permits a new project, open the project selector URL, create/select the project, then enable only the APIs listed above."
+    $lines += "3. Configure Google Auth Platform only when the selected route needs Google OAuth client credentials. Create a Desktop/installed-app OAuth client unless the selected MCP documentation explicitly requires another client type."
+    $lines += "4. Copy only the client ID/secret values into ignored local setup, or point the kit to an ignored OAuth JSON file. Do not paste secrets into reusable docs."
+    $lines += "5. For BigQuery, request project/dataset IDs and least-privilege IAM separately from OAuth scopes."
+    $lines += '6. Return to the setup conversation and run `Dashboard`, then the relevant auth command.'
+    $lines += ""
+
+    Set-Content -LiteralPath $guidePath -Value $lines -Encoding UTF8
+    Write-Step "Credential guide"
+    Write-Host "Wrote credential guide: $guidePath"
+    Write-Host "Direct URLs and selected credential keys are ready for the conversation."
+}
+
+function Invoke-BigQuerySafetyPlan {
+    Ensure-LocalFiles | Out-Null
+    New-Item -ItemType Directory -Force $GeneratedDir | Out-Null
+    $planPath = Join-Path $GeneratedDir "bigquery-safety-plan.md"
+    $envMap = Import-DotEnvMap -Path $EnvPath
+    $projectId = ""
+    foreach ($key in @("BIGQUERY_PROJECT_ID", "GOOGLE_PROJECT_ID")) {
+        if ($envMap.ContainsKey($key) -and -not [string]::IsNullOrWhiteSpace($envMap[$key])) {
+            $projectId = [string]$envMap[$key]
+            break
+        }
+    }
+    $datasets = if ($envMap.ContainsKey("BIGQUERY_DATASETS")) { [string]$envMap["BIGQUERY_DATASETS"] } else { "" }
+    $region = if ($envMap.ContainsKey("BIGQUERY_REGION")) { [string]$envMap["BIGQUERY_REGION"] } else { "" }
+    $maxBytes = if ($envMap.ContainsKey("BIGQUERY_MAX_BYTES_BILLED")) { [string]$envMap["BIGQUERY_MAX_BYTES_BILLED"] } else { "" }
+
+    $projectLabel = if ($projectId) { $projectId } else { "<project-id>" }
+    $datasetLabel = if ($datasets) { $datasets } else { "<dataset-id>" }
+    $maxBytesLabel = if ($maxBytes) { $maxBytes } else { "<max-bytes-billed>" }
+
+    $lines = @()
+    $lines += "# BigQuery Safety Plan"
+    $lines += ""
+    $lines += "Generated: $((Get-Date).ToString("yyyy-MM-dd HH:mm:ss zzz"))"
+    $lines += ""
+    $lines += "Use this before running BigQuery through an MCP, direct API, or CLI. It is designed for read-only first-day analytics work."
+    $lines += ""
+    $lines += "## Current Local Context"
+    $lines += ""
+    $lines += "- Project: $projectLabel"
+    $lines += "- Approved datasets: $datasetLabel"
+    $lines += "- Region/location: $(if ($region) { $region } else { '<confirm before querying>' })"
+    $lines += "- Max bytes billed guardrail: $maxBytesLabel"
+    $lines += ""
+    $lines += "## Guardrails"
+    $lines += ""
+    $lines += "1. Confirm project, dataset, table pattern, region, date range, and whether the query is read-only."
+    $lines += "2. Start with metadata listing: projects, datasets, tables, schema, and partition fields."
+    $lines += "3. Use partition filters on date-sharded or partitioned tables before aggregation."
+    $lines += '4. Add a small `LIMIT` for exploration. Do not use `LIMIT` as a cost control by itself.'
+    $lines += "5. Run a dry-run or estimate first when the tool supports it."
+    $lines += "6. Ask for explicit approval before broad scans, expensive estimates, write/create/export jobs, or queries outside the approved datasets."
+    $lines += ""
+    $lines += "## CLI Dry-Run Templates"
+    $lines += ""
+    $tablePlaceholder = "$projectLabel.$datasetLabel.<table>"
+    $lines += '```powershell'
+    $lines += "bq query --use_legacy_sql=false --dry_run --project_id `"$projectLabel`" `"SELECT 1`""
+    $lines += "bq query --use_legacy_sql=false --dry_run --maximum_bytes_billed $maxBytesLabel --project_id `"$projectLabel`" `"SELECT * FROM $tablePlaceholder WHERE <partition_date> BETWEEN 'YYYY-MM-DD' AND 'YYYY-MM-DD' LIMIT 100`""
+    $lines += '```'
+    $lines += ""
+    $lines += "## MCP Prompt Template"
+    $lines += ""
+    $lines += '```text'
+    $lines += "Use BigQuery in read-only mode. First list metadata for project $projectLabel and approved dataset(s) $datasetLabel. Before running SQL, show the project, dataset, table, date filter, whether a dry-run/estimate is available, and expected cost or bytes if the tool exposes it. Use partition filters and LIMIT 100 for exploration. Ask before broad/costly queries or anything outside the approved dataset list."
+    $lines += '```'
+    $lines += ""
+    $lines += "## Approval Triggers"
+    $lines += ""
+    $lines += "- No project or dataset ID has been confirmed."
+    $lines += "- Query scans wildcard, unpartitioned, or unknown-size tables."
+    $lines += "- Estimated bytes exceed the local/company guardrail."
+    $lines += "- Query writes, creates, exports, loads, deletes, updates, merges, or calls procedures."
+    $lines += "- Query touches personal data or sensitive customer data beyond the stated task."
+
+    Set-Content -LiteralPath $planPath -Value $lines -Encoding UTF8
+    Write-Step "BigQuery safety plan"
+    Write-Host "Wrote BigQuery safety plan: $planPath"
+    Write-Host "Use metadata and dry-run checks before any real query."
 }
 
 function Get-DefaultHttpsBrowserProgId {
@@ -2305,6 +2615,12 @@ switch ($Action) {
     "Doctor" {
         Invoke-Doctor
     }
+    "CredentialGuide" {
+        Invoke-CredentialGuide
+    }
+    "BigQuerySafetyPlan" {
+        Invoke-BigQuerySafetyPlan
+    }
     "FirstDayChecklist" {
         Invoke-FirstDayChecklist
     }
@@ -2319,6 +2635,9 @@ switch ($Action) {
     }
     "TestFixtures" {
         Invoke-TestFixtures
+    }
+    "PesterTests" {
+        Invoke-PesterTests
     }
     "Prereqs" {
         Ensure-LocalFiles

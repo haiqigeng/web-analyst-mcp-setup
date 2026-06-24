@@ -78,9 +78,30 @@
         ],
         "authCommand": null,
         "notes": "Google's official Drive remote MCP in Developer Preview. Prefer this when the selected MCP client can pass static OAuth client credentials for remote MCP servers and company policy allows it.",
-        "testPrompt": "List 5 recent Google Drive files."
+        "testPrompt": "List 5 recent Google Drive files.",
+        "lifecycleStatus": "fallback",
+        "recommendedUse": "First-party Google Drive remote MCP when the selected client supports custom OAuth and company policy requires first-party providers.",
+        "fallbackWhen": [
+          "Company requires first-party Google Workspace MCP",
+          "Selected MCP client supports custom OAuth credentials for remote MCP"
+        ],
+        "knownLimitations": [
+          "Developer Preview",
+          "Higher setup friction",
+          "May require static OAuth support in the MCP client"
+        ]
       }
-    }
+    },
+    "lifecycleStatus": "default",
+    "recommendedUse": "Day-one local Node Google Workspace setup when company-approved OAuth credentials are available.",
+    "fallbackWhen": [
+      "Official remote Google Workspace MCP cannot use custom OAuth credentials in the selected client",
+      "The user needs practical browser login on day one"
+    ],
+    "knownLimitations": [
+      "Trusted third-party, not Google official",
+      "Scopes can include Drive, Docs, Sheets, Slides, and Calendar depending on OAuth grant"
+    ]
   },
   "gmail": {
     "displayName": "Gmail",
@@ -157,9 +178,30 @@
         ],
         "authCommand": null,
         "notes": "Google's official Gmail remote MCP in Developer Preview. Prefer this when the selected MCP client can pass static OAuth client credentials for remote MCP servers and company policy allows it.",
-        "testPrompt": "List Gmail labels."
+        "testPrompt": "List Gmail labels.",
+        "lifecycleStatus": "fallback",
+        "recommendedUse": "First-party Gmail remote MCP when the selected client supports custom OAuth and company policy requires first-party providers.",
+        "fallbackWhen": [
+          "Company requires first-party Gmail MCP",
+          "Selected MCP client supports custom OAuth credentials for remote MCP"
+        ],
+        "knownLimitations": [
+          "Developer Preview",
+          "Higher setup friction",
+          "May require static OAuth support in the MCP client"
+        ]
       }
-    }
+    },
+    "lifecycleStatus": "default",
+    "recommendedUse": "Day-one local Node Gmail setup when company-approved OAuth credentials are available.",
+    "fallbackWhen": [
+      "Official remote Gmail MCP cannot use custom OAuth credentials in the selected client",
+      "The user needs practical browser login on day one"
+    ],
+    "knownLimitations": [
+      "Trusted third-party, not Google official",
+      "Default scopes can allow message modification, so keep write actions approval-gated"
+    ]
   },
   "googleTagManager": {
     "displayName": "Google Tag Manager",
@@ -185,7 +227,17 @@
     "credentialKeys": [],
     "authCommand": null,
     "notes": "Personal OAuth mode through Stape's hosted remote GTM MCP. The user signs in with their own Google account. No service-account email is required.",
-    "testPrompt": "List accessible GTM accounts or containers using the signed-in Google account."
+    "testPrompt": "List accessible GTM accounts or containers using the signed-in Google account.",
+    "lifecycleStatus": "default",
+    "recommendedUse": "Fast GTM browser OAuth setup when company policy allows Stape-hosted remote MCP.",
+    "fallbackWhen": [
+      "No company Google Cloud OAuth setup is ready",
+      "The user needs quick GTM account/container visibility"
+    ],
+    "knownLimitations": [
+      "Third-party hosted remote MCP",
+      "Write/publish-capable workflows must remain explicitly approval-gated"
+    ]
   },
   "googleAnalytics": {
     "displayName": "Google Analytics 4",
@@ -226,7 +278,17 @@
     ],
     "authCommand": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\\WebAnalystSetup.ps1 -Action GoogleAdcLogin",
     "notes": "Official Google Analytics MCP. Use user ADC/browser login with the user's own Google account and approved company OAuth credentials when available. Keep this as the only GA4 MCP provider until the user explicitly requests a new one.",
-    "testPrompt": "List GA4 account summaries or run a minimal read-only report."
+    "testPrompt": "List GA4 account summaries or run a minimal read-only report.",
+    "lifecycleStatus": "default",
+    "recommendedUse": "Official GA4 MCP with Google ADC/browser login.",
+    "fallbackWhen": [
+      "No alternative GA4 provider should be used unless the user explicitly requests it"
+    ],
+    "knownLimitations": [
+      "Python/pipx runtime",
+      "Requires Google Cloud CLI or ADC-compatible setup",
+      "Requires Analytics Admin/Data APIs and user access to GA4 properties"
+    ]
   },
   "browserQa": {
     "displayName": "Browser QA / Playwright",
@@ -250,7 +312,15 @@
     "credentialKeys": [],
     "authCommand": null,
     "notes": "Default browser QA MCP. Use for user journeys, consent flows, forms, ecommerce paths, screenshots, and repeatable browser interaction. Prefer this before Chrome DevTools when the task is normal page interaction rather than deep debugging.",
-    "testPrompt": "Open a simple public page and report the page title."
+    "testPrompt": "Open a simple public page and report the page title.",
+    "lifecycleStatus": "default",
+    "recommendedUse": "First browser automation MCP for journey QA, consent, ecommerce, forms, and screenshots.",
+    "fallbackWhen": [
+      "Use before Browser Debug for normal page interaction"
+    ],
+    "knownLimitations": [
+      "Can interact with pages, so sensitive logged-in journeys need user awareness"
+    ]
   },
   "browserDebug": {
     "displayName": "Browser Debug / Chrome DevTools",
@@ -276,7 +346,17 @@
     "credentialKeys": [],
     "authCommand": null,
     "notes": "Advanced browser debugging MCP. Use for network requests, console errors, screenshots, performance traces, and DevTools-level investigation. It exposes browser content to the MCP client; tell the user before using it on logged-in or sensitive pages. Usage statistics are disabled by default in this kit.",
-    "testPrompt": "Open a public page and list console errors or key network requests."
+    "testPrompt": "Open a public page and list console errors or key network requests.",
+    "lifecycleStatus": "optional",
+    "recommendedUse": "Advanced browser debugging for console, network, screenshot, and performance traces.",
+    "fallbackWhen": [
+      "Use when Playwright-style interaction is not enough",
+      "Use when DevTools-level network/console evidence is needed"
+    ],
+    "knownLimitations": [
+      "Can expose logged-in page content to the MCP client",
+      "Best with Chrome or compatible Chromium browser"
+    ]
   },
   "bigQuery": {
     "displayName": "BigQuery",
@@ -313,7 +393,18 @@
     ],
     "authCommand": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\\WebAnalystSetup.ps1 -Action GoogleAdcLogin; powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\\WebAnalystSetup.ps1 -Action BigQueryAdcBearerToken",
     "notes": "Official remote BigQuery MCP. Prefer company-approved Google Cloud IAM with least-privilege roles such as MCP Tool User, BigQuery Job User, and BigQuery Data Viewer. Use read-only datasets, dry-runs or query limits where possible, and ask for project/dataset IDs before analysis. BigQuery does not use API keys. In Codex, if remote OAuth login fails with dynamic client registration not supported, the day-one short-term option is to generate a short-lived ADC bearer token into BIGQUERY_MCP_ACCESS_TOKEN and configure bearer_token_env_var; this usually expires in about one hour and should be regenerated/reloaded when needed. Long-term fallback: Google MCP Toolbox for Databases when the company needs local control, parameterized tools, or allowlisted queries.",
-    "testPrompt": "List accessible BigQuery projects or datasets, then run only a small metadata/read-only test."
+    "testPrompt": "List accessible BigQuery projects or datasets, then run only a small metadata/read-only test.",
+    "lifecycleStatus": "default",
+    "recommendedUse": "Official remote BigQuery MCP with company-approved IAM/OAuth; use short-lived ADC bearer token only as a day-one bridge when remote OAuth is blocked.",
+    "fallbackWhen": [
+      "Company approves Google Cloud MCP/IAM access",
+      "Need metadata or read-only SQL from BigQuery"
+    ],
+    "knownLimitations": [
+      "Queries can incur cost",
+      "Remote OAuth may be blocked in some clients",
+      "Short-lived bearer-token bridge expires and requires reload"
+    ]
   },
   "clickup": {
     "displayName": "ClickUp",
@@ -335,7 +426,15 @@
     "credentialKeys": [],
     "authCommand": "codex mcp login clickup",
     "notes": "Recommended official remote MCP. Use browser OAuth from the MCP client when prompted.",
-    "testPrompt": "List ClickUp workspaces."
+    "testPrompt": "List ClickUp workspaces.",
+    "lifecycleStatus": "optional",
+    "recommendedUse": "Official remote ClickUp MCP when project/task context is needed.",
+    "fallbackWhen": [
+      "User selected ClickUp and OAuth works in the MCP client"
+    ],
+    "knownLimitations": [
+      "Workspace write-capable; keep edits approval-gated"
+    ]
   },
   "trello": {
     "displayName": "Trello",
@@ -362,7 +461,16 @@
     ],
     "authCommand": null,
     "notes": "No clear first-party Trello MCP was found. This remains the current third-party candidate.",
-    "testPrompt": "List Trello boards."
+    "testPrompt": "List Trello boards.",
+    "lifecycleStatus": "candidate",
+    "recommendedUse": "Third-party Trello MCP candidate only when Trello is selected and company policy allows it.",
+    "fallbackWhen": [
+      "No first-party Trello MCP is available and the user needs board visibility"
+    ],
+    "knownLimitations": [
+      "Candidate third-party provider",
+      "Board write-capable"
+    ]
   },
   "pianoAnalytics": {
     "displayName": "Piano Analytics MCP",
@@ -393,7 +501,16 @@
     ],
     "authCommand": null,
     "notes": "Official Piano MCP is private beta and requires Piano whitelisting plus an access key and secret key. If beta access is not available, use pianoAnalyticsApi.",
-    "testPrompt": "Ask get_web_analytics_data for a simple traffic summary."
+    "testPrompt": "Ask get_web_analytics_data for a simple traffic summary.",
+    "lifecycleStatus": "private-beta",
+    "recommendedUse": "Official Piano MCP only when the user/client is whitelisted for the private beta.",
+    "fallbackWhen": [
+      "Piano confirms MCP beta access"
+    ],
+    "knownLimitations": [
+      "Private beta access required",
+      "Requires Piano access key and secret key"
+    ]
   },
   "pianoAnalyticsApi": {
     "displayName": "Piano Analytics API Connector",
@@ -422,7 +539,17 @@
     ],
     "authCommand": null,
     "notes": "Fallback path when Piano MCP beta access is not whitelisted. The agent should use direct API planning/scripts instead of MCP tools.",
-    "testPrompt": "Verify Piano API credentials and prepare a Data Query request plan."
+    "testPrompt": "Verify Piano API credentials and prepare a Data Query request plan.",
+    "lifecycleStatus": "api-fallback",
+    "recommendedUse": "Direct Piano API connector when Piano MCP beta access is unavailable.",
+    "fallbackWhen": [
+      "Piano MCP private beta is unavailable",
+      "The user approves read-only API connector work"
+    ],
+    "knownLimitations": [
+      "Not an MCP server",
+      "Requires API request planning and credential handling"
+    ]
   },
   "tagCommander": {
     "displayName": "Tag Commander / Commanders Act",
@@ -448,7 +575,17 @@
     ],
     "authCommand": null,
     "notes": "No clear first-party public MCP was found. Use API credentials until a trusted MCP is supplied.",
-    "testPrompt": "Verify Tag Commander credentials and prepare a container audit plan."
+    "testPrompt": "Verify Tag Commander credentials and prepare a container audit plan.",
+    "lifecycleStatus": "api-fallback",
+    "recommendedUse": "Direct Commanders Act API connector until a trusted public MCP is supplied.",
+    "fallbackWhen": [
+      "No trusted public MCP is available",
+      "The user approves API-token workflow"
+    ],
+    "knownLimitations": [
+      "Not an MCP server",
+      "Container write-capable API needs explicit approval"
+    ]
   },
   "contentsquare": {
     "displayName": "Contentsquare",
@@ -472,6 +609,15 @@
     ],
     "authCommand": "codex mcp login contentsquare",
     "notes": "Recommended official Contentsquare MCP. The exact URL is provided inside Contentsquare Analysis setup > Model Context Protocol, and auth is OAuth.",
-    "testPrompt": "List available Contentsquare projects."
+    "testPrompt": "List available Contentsquare projects.",
+    "lifecycleStatus": "optional",
+    "recommendedUse": "Official Contentsquare MCP when the user provides the MCP URL from Contentsquare Analysis setup.",
+    "fallbackWhen": [
+      "Contentsquare is selected and OAuth URL is available"
+    ],
+    "knownLimitations": [
+      "MCP URL is tenant/account-specific",
+      "Remote vendor MCP"
+    ]
   }
 }

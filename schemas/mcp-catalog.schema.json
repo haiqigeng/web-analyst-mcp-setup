@@ -12,6 +12,10 @@
         "displayName",
         "kind",
         "trustLevel",
+        "lifecycleStatus",
+        "recommendedUse",
+        "fallbackWhen",
+        "knownLimitations",
         "officialness",
         "authFriction",
         "runtime",
@@ -33,6 +37,18 @@
         "transport": { "enum": ["stdio", "http", null] },
         "runner": { "enum": ["npx", "pipx", null] },
         "trustLevel": { "type": "string" },
+        "lifecycleStatus": {
+          "enum": ["default", "fallback", "optional", "candidate", "private-beta", "api-fallback", "deprecated"]
+        },
+        "recommendedUse": { "type": "string" },
+        "fallbackWhen": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "knownLimitations": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
         "officialness": { "type": "string" },
         "authFriction": { "enum": ["low", "medium", "high"] },
         "runtime": { "enum": ["node", "python", "remote", "api"] },
@@ -84,6 +100,10 @@
       "required": [
         "displayName",
         "trustLevel",
+        "lifecycleStatus",
+        "recommendedUse",
+        "fallbackWhen",
+        "knownLimitations",
         "officialness",
         "authFriction",
         "runtime",

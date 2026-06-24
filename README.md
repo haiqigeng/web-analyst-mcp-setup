@@ -1,6 +1,6 @@
 # Web Analyst MCP Setup
 
-Version: 1.2.0
+Version: 1.3.0
 
 Windows-first setup kit for daily web analyst work with AI agents such as Codex, Claude Code, and Gemini CLI.
 
@@ -16,7 +16,7 @@ The kit is optimized for first-day setup on a new company PC: use approved compa
 
 For Google tools, the order of preference is: company-provided OAuth credentials, vendor/browser OAuth, a company-approved managed-auth broker, then a new Google Cloud project only as a last resort.
 
-Detailed Google Console steps are handled during the setup conversation when needed, using the selected tools and current Google screens. The reusable kit keeps only the stable checklist.
+Detailed Google Console steps are handled during the setup conversation when needed, using the selected tools and current Google screens. The on-demand credential guide gives direct setup URLs for the selected tools without storing secrets in reusable files.
 
 The kit is for onboarding and connection. One-off mailbox, Drive, or client-data cleanup tasks should stay outside the reusable setup instructions.
 
@@ -54,6 +54,12 @@ User-facing generated files:
 
 - `generated/onboarding-report.md`: user-facing handover summary.
 - `generated/first-day-checklist.md`: user-facing next actions and read-only smoke tests.
+On-demand user-facing generated files:
+
+- `generated/credential-guide.md`: direct credential/setup URLs for the selected tools.
+- `generated/bigquery-safety-plan.md`: BigQuery dry-run and cost-safety checklist.
+- `generated/mcp-update-check.md`: selected MCP package/endpoint freshness check.
+
 The helper also keeps internal resume state for agents/scripts in `generated/onboarding-state.json`; you usually do not need to open it.
 
 Browser Debug can inspect browser content. Use it deliberately on logged-in, internal, or sensitive pages.
@@ -73,7 +79,7 @@ Core reusable files:
 - `secrets/.env.template`: copied to local ignored `secrets/.env.local`.
 - `schemas/*.schema.json`: schema documentation and validation targets for catalog/selection/profile files.
 - `tests/fixtures/profile-server-names.json`: expected MCP server names for reusable profiles.
-- `scripts/lib/*.ps1`: focused helper modules for release audit, catalog review, checklist generation, and fixture tests.
+- `scripts/lib/*.ps1`: focused helper modules for release audit, catalog review, checklist generation, Pester tests, and fixture tests.
 - `docs/`: security guidance.
 - `.github/workflows/validate.yml`: GitHub Actions validation for releases and pull requests.
 - `.gitignore`: keeps credentials and generated machine-specific files out of the reusable kit.
@@ -91,10 +97,12 @@ These commands are not required in normal use. The agent should run them for you
 
 - `Prepare`: creates local ignored files from templates.
 - `UseProfile`: dormant/manual helper that applies a reusable tool profile to local ignored `config/tool-selection.json`; the default setup flow does not use profiles yet.
-- `Validate`: validates reusable kit files, JSON, PowerShell syntax, catalog metadata, profiles, and secret hygiene.
+- `Validate`: validates reusable kit files, JSON, PowerShell syntax, catalog metadata, profiles, lifecycle metadata, and secret hygiene.
 - `Doctor`: prints a first-day readiness report for the machine, local state, prerequisites, browser, and selected tools.
+- `CredentialGuide`: writes an ignored credential guide with direct setup URLs for selected tools.
+- `BigQuerySafetyPlan`: writes an ignored BigQuery dry-run/cost-safety plan before query work.
 - `Prereqs`: checks and installs needed prerequisites such as Node.js, Git, Python/pipx, or Google Cloud CLI depending on selected providers.
-- `CheckMcpUpdates`: checks selected MCP packages before install/config generation; npm-based MCPs should use `@latest`.
+- `CheckMcpUpdates`: checks selected MCP packages, remote endpoint reachability, and catalog verification age before install/config generation.
 - `Apply`: writes MCP configuration for the selected AI client.
 - `Dashboard`: prints enabled tools, missing credentials, and reconnect/auth commands in the terminal.
 - `Status`: checks selected tool status, visible MCP client state, and lightweight Google token scope/API reachability where possible.
@@ -102,14 +110,17 @@ These commands are not required in normal use. The agent should run them for you
 - `OnboardingReport`: writes an ignored handover report to `generated/onboarding-report.md`, machine-readable state to `generated/onboarding-state.json`, and the first-day checklist.
 - `CatalogReview`: writes an ignored catalog maintainability report to `generated/catalog-review.md`.
 - `TestFixtures`: checks reusable profile expectations against `tests/fixtures/profile-server-names.json`.
+- `PesterTests`: runs the maintainability test suite in `tests/WebAnalystSetup.Tests.ps1`.
 - `ReleaseAudit`: validates the kit, checks tracked files for local state or credential patterns, and builds an audit archive from git.
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action Prepare
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action Validate
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action Doctor
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action CredentialGuide
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action Prereqs
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action CheckMcpUpdates
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action BigQuerySafetyPlan
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action Apply -Client Codex
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action Dashboard
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action Status
@@ -117,6 +128,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetu
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action OnboardingReport
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action CatalogReview
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action TestFixtures
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action PesterTests
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action ReleaseAudit
 ```
 
@@ -152,6 +164,7 @@ Before publishing or sharing the kit, the agent should run:
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action Validate
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action TestFixtures
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action PesterTests
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action CatalogReview
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action ReleaseAudit
 ```

@@ -59,11 +59,18 @@ function Invoke-CatalogReview {
             if ($item.officialness -match "third-party" -and $item.riskLevel -eq "high") {
                 $warnings += "$($providerEntry.ToolName)/$($providerEntry.ProviderName) is third-party and high risk. Confirm company approval before use."
             }
+            if ($item.lifecycleStatus -eq "default" -and @($item.knownLimitations).Count -eq 0) {
+                $warnings += "$($providerEntry.ToolName)/$($providerEntry.ProviderName) is a default provider but has no known limitations documented."
+            }
+            if ($item.lifecycleStatus -in @("candidate", "private-beta", "deprecated") -and $item.riskLevel -eq "low") {
+                $warnings += "$($providerEntry.ToolName)/$($providerEntry.ProviderName) has lifecycle '$($item.lifecycleStatus)' but low risk. Recheck risk metadata."
+            }
 
             $rows += [PSCustomObject]@{
                 Tool = $providerEntry.ToolName
                 Provider = $providerEntry.ProviderName
                 DisplayName = [string]$item.displayName
+                Lifecycle = [string]$item.lifecycleStatus
                 Kind = [string]$item.kind
                 Runtime = [string]$item.runtime
                 Auth = [string]$item.authMode
@@ -92,10 +99,10 @@ function Invoke-CatalogReview {
     $lines += ""
     $lines += "## Provider Matrix"
     $lines += ""
-    $lines += "| Tool | Provider | Kind | Runtime | Auth | Officialness | Risk | Last Verified |"
-    $lines += "| --- | --- | --- | --- | --- | --- | --- | --- |"
+    $lines += "| Tool | Provider | Lifecycle | Kind | Runtime | Auth | Officialness | Risk | Last Verified |"
+    $lines += "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"
     foreach ($row in @($rows | Sort-Object Tool, Provider)) {
-        $lines += "| $($row.Tool) | $($row.Provider) | $($row.Kind) | $($row.Runtime) | $($row.Auth) | $($row.Officialness) | $($row.Risk) | $($row.LastVerified) |"
+        $lines += "| $($row.Tool) | $($row.Provider) | $($row.Lifecycle) | $($row.Kind) | $($row.Runtime) | $($row.Auth) | $($row.Officialness) | $($row.Risk) | $($row.LastVerified) |"
     }
 
     if ($warnings.Count -gt 0) {

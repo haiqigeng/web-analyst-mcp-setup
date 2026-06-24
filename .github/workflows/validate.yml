@@ -45,6 +45,11 @@ jobs:
         run: |
           .\scripts\WebAnalystSetup.ps1 -Action TestFixtures
 
+      - name: Run Pester tests
+        shell: pwsh
+        run: |
+          .\scripts\WebAnalystSetup.ps1 -Action PesterTests
+
       - name: Run catalog review
         shell: pwsh
         run: |
@@ -66,6 +71,9 @@ jobs:
             "generated/onboarding-report.md",
             "generated/onboarding-state.json",
             "generated/first-day-checklist.md",
+            "generated/credential-guide.md",
+            "generated/bigquery-safety-plan.md",
+            "generated/mcp-update-check.md",
             "generated/catalog-review.md",
             "generated/fixture-test-report.md",
             "generated/release-audit.md",

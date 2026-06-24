@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.3.0 - Setup guidance, safety, and maintainability
+
+- Added on-demand `CredentialGuide` output with direct setup URLs and selected-tool credential requirements.
+- Expanded `CheckMcpUpdates` to report npm/PyPI freshness, remote MCP endpoint reachability, and catalog verification age.
+- Added `BigQuerySafetyPlan` for dry-run, max-bytes, project/dataset, and approval guardrails before query work.
+- Added provider lifecycle metadata for default, fallback, optional, candidate, private-beta, and API-fallback decisions.
+- Added Pester maintainability tests and wired them into CI and release audit.
+
 ## v1.2.0 - Cleaner first-day setup flow
 
 - Changed the default onboarding flow to direct tool selection; reusable profiles remain dormant/manual until profile-to-MCP choices are designed.

@@ -60,6 +60,10 @@ Use `config/mcp-catalog.json` as a living catalog. Choose the path most likely t
 Use catalog decision metadata when explaining provider choices:
 
 - `officialness`: first-party, trusted third-party, candidate, private beta, or direct API.
+- `lifecycleStatus`: default, fallback, optional, candidate, private beta, API fallback, or deprecated.
+- `recommendedUse`: when this provider should be selected.
+- `fallbackWhen`: conditions that justify this provider.
+- `knownLimitations`: operational or trust limits to mention before setup.
 - `authFriction`: expected first-day setup difficulty.
 - `runtime`: Node, Python, remote, or direct API.
 - `dataExposure`: where tool calls and returned data travel.
@@ -84,7 +88,7 @@ Provider decision rules:
 
 1. If the company mandates first-party-only, use official providers even when they take longer.
 2. If the user has no policy constraint, start with the catalog default: well-known, easy day-one, Node-first where credible.
-3. If the default cannot authenticate cleanly, switch to the documented fallback and explain the tradeoff.
+3. If the default cannot authenticate cleanly, switch only to a documented fallback whose `fallbackWhen` condition matches the situation, then explain the tradeoff and known limitations.
 4. Do not invent a new MCP during setup. Search current sources first, then update `config/mcp-catalog.json` before using it.
 
 After each authentication step, run `Status` and one lightweight read-only test. Report the connected account/project when the tool exposes it, any missing scope/API issue, and whether the tool is local, remote, or API-token based.
@@ -145,6 +149,12 @@ Tell the user which selected tools still need account login, a path, URL, or cre
 
 If selected tools need company approval, explain the missing credential or access in the conversation. If the user asks for a formal request, draft it directly from the selected tools and current configuration status.
 
+If Google or vendor credentials are missing, generate the on-demand credential guide and use its direct URLs in the conversation:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action CredentialGuide
+```
+
 Run diagnostics before installing prerequisites:
 
 ```powershell
@@ -178,6 +188,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetu
 ```
 
 For local Node MCPs, the helper checks npm metadata and the catalog should use `@latest`. For remote MCPs, report that the server is updated by the provider. For Python/pipx fallbacks, verify upstream before selecting that provider.
+
+Use the generated `generated/mcp-update-check.md` as user-facing evidence when explaining package freshness, remote endpoint reachability, or stale catalog verification dates.
 
 When modifying reusable kit files or preparing a release, run:
 
@@ -242,6 +254,14 @@ For Browser QA, no account credential is required by default. Install/configure 
 For Browser Debug, no account credential is required by default, but it can inspect pages, console logs, network requests, screenshots, and performance traces. Ask before using it on logged-in, internal, or sensitive pages. Usage statistics are disabled by default in this kit. If Chrome is missing, configure Chrome DevTools MCP with a compatible Chromium executable path such as Microsoft Edge before asking to install Chrome.
 
 For BigQuery, use the official remote MCP first. Ask for the approved Google Cloud project ID, dataset IDs, and whether the user has these or equivalent least-privilege roles: MCP Tool User, BigQuery Job User, and BigQuery Data Viewer. Use browser OAuth from the MCP client when available. Start with metadata listing or a small read-only query; confirm before running costly or broad queries. If remote MCP is blocked by policy or the company wants allowlisted/parameterized tools, use Google MCP Toolbox for Databases as the fallback plan.
+
+Before any real BigQuery SQL work, generate the BigQuery safety plan:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action BigQuerySafetyPlan
+```
+
+Use it to confirm project, dataset, region, date filters, dry-run/estimate behavior, and cost guardrails. Do not run broad or costly queries without explicit approval.
 
 ### Google Cloud Last-Resort Checklist
 
@@ -341,6 +361,7 @@ Before publishing a release, run:
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action Validate
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action TestFixtures
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action PesterTests
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action CatalogReview
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action ReleaseAudit
 ```
