@@ -1,5 +1,7 @@
 # Web Analyst MCP Setup
 
+[![Latest release](https://img.shields.io/github/v/release/haiqigeng/=semver)](https://github.com/haiqigeng/web-analyst-mcp-setup/releases/latest) ![License](https://img.shields.io/github/license/haiqigeng/web-analyst-mcp-setup) ![Top language](https://img.shields.io/github/languages/top/haiqigeng/web-analyst-mcp-setup)
+
 Version: 1.3.0
 
 Windows-first setup kit for daily web analyst work with AI agents such as Codex, Claude Code, and Gemini CLI.
