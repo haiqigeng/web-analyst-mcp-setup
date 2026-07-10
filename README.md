@@ -1,8 +1,8 @@
 # Web Analyst MCP Setup
 
-[![Validate kit](https://github.com/HQ-Guillaume/web-analyst-mcp-setup/actions/workflows/validate.yml/badge.svg)](https://github.com/HQ-Guillaume/web-analyst-mcp-setup/actions/workflows/validate.yml)
-[![Latest release](https://img.shields.io/github/v/release/HQ-Guillaume/web-analyst-mcp-setup?sort=semver)](https://github.com/HQ-Guillaume/web-analyst-mcp-setup/releases/latest)
-[![License](https://img.shields.io/github/license/HQ-Guillaume/web-analyst-mcp-setup)](LICENSE)
+[![Validate kit](https://github.com/haiqigeng/web-analyst-mcp-setup/actions/workflows/validate.yml/badge.svg)](https://github.com/haiqigeng/web-analyst-mcp-setup/actions/workflows/validate.yml)
+[![Latest release](https://img.shields.io/github/v/release/haiqigeng/web-analyst-mcp-setup?sort=semver)](https://github.com/haiqigeng/web-analyst-mcp-setup/releases/latest)
+[![License](https://img.shields.io/github/license/haiqigeng/web-analyst-mcp-setup)](LICENSE)
 
 Version: 1.4.0
 
@@ -21,7 +21,7 @@ Read AGENTS.md and guide me through the web analyst setup.
 Codex can also discover the repository as a skill when it is installed under its skills directory:
 
 ```powershell
-git clone https://github.com/HQ-Guillaume/web-analyst-mcp-setup.git "$env:USERPROFILE\.codex\skills\web-analyst-mcp-setup"
+git clone https://github.com/haiqigeng/web-analyst-mcp-setup.git "$env:USERPROFILE\.codex\skills\web-analyst-mcp-setup"
 ```
 
 Then invoke it with:
@@ -30,7 +30,7 @@ Then invoke it with:
 Use $web-analyst-mcp-setup to configure my selected web analyst tools.
 ```
 
-The latest ZIP is also available from [GitHub Releases](https://github.com/HQ-Guillaume/web-analyst-mcp-setup/releases/latest).
+The latest ZIP is also available from [GitHub Releases](https://github.com/haiqigeng/web-analyst-mcp-setup/releases/latest).
 
 ## What It Does
 
