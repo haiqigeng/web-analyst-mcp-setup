@@ -27,6 +27,7 @@
         "source",
         "authMode",
         "serverName",
+        "defaultProvider",
         "credentialKeys",
         "notes",
         "testPrompt"

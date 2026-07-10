@@ -1,174 +1,148 @@
 # Web Analyst MCP Setup
 
-[![Latest release](https://img.shields.io/github/v/release/haiqigeng/=semver)](https://github.com/haiqigeng/web-analyst-mcp-setup/releases/latest) ![License](https://img.shields.io/github/license/haiqigeng/web-analyst-mcp-setup) ![Top language](https://img.shields.io/github/languages/top/haiqigeng/web-analyst-mcp-setup)
+[![Validate kit](https://github.com/HQ-Guillaume/web-analyst-mcp-setup/actions/workflows/validate.yml/badge.svg)](https://github.com/HQ-Guillaume/web-analyst-mcp-setup/actions/workflows/validate.yml)
+[![Latest release](https://img.shields.io/github/v/release/HQ-Guillaume/web-analyst-mcp-setup?sort=semver)](https://github.com/HQ-Guillaume/web-analyst-mcp-setup/releases/latest)
+[![License](https://img.shields.io/github/license/HQ-Guillaume/web-analyst-mcp-setup)](LICENSE)
 
-Version: 1.3.0
+Version: 1.4.0
 
-Windows-first setup kit for daily web analyst work with AI agents such as Codex, Claude Code, and Gemini CLI.
+A Windows-first onboarding skill that helps Codex, Claude Code, Gemini CLI, and similar agents connect and verify the tools a web analyst needs on a new company PC.
 
-Open this folder in your agent and say:
+The project handles tool selection, machine checks, provider decisions, prerequisites, credential guidance, MCP configuration, browser authentication, session reloads, read-only verification, handover, and safe cleanup. Provider-specific requirements live in the [MCP catalog](config/mcp-catalog.json), so the workflow can evolve without duplicating instructions.
+
+## Start
+
+Open the project folder in an AI coding agent and say:
 
 ```text
 Read AGENTS.md and guide me through the web analyst setup.
 ```
 
-The agent should ask a few questions, configure the local files itself, run the setup script, and pause only for browser approval, vendor-console access, or credentials it cannot create for you.
-
-The kit is optimized for first-day setup on a new company PC: use approved company credentials when available, get connected successfully, and keep official/future MCP paths documented without letting them block onboarding.
-
-For Google tools, the order of preference is: company-provided OAuth credentials, vendor/browser OAuth, a company-approved managed-auth broker, then a new Google Cloud project only as a last resort.
-
-Detailed Google Console steps are handled during the setup conversation when needed, using the selected tools and current Google screens. The on-demand credential guide gives direct setup URLs for the selected tools without storing secrets in reusable files.
-
-The kit is for onboarding and connection. One-off mailbox, Drive, or client-data cleanup tasks should stay outside the reusable setup instructions.
-
-During MCP setup, delete/publish actions are deliberately gated: the agent must never delete, reset, revoke, publish, or deploy MCP endpoint/server/container/project-facing state without explicit approval.
-
-## First-Day Flow
-
-The agent should run the setup as a guided onboarding flow:
-
-1. Identify the AI client, selected tools, company context, and credential policy.
-2. Select tools directly with the user and write the local ignored `config/tool-selection.json`.
-3. Inspect the PC before installing anything.
-4. Choose the approved credential route for each selected tool.
-5. Install only the prerequisites required by those choices.
-6. Write MCP configuration, authenticate, reload the AI client if needed, and run harmless read-only smoke tests.
-7. End with user-facing outputs: an onboarding report and a first-day checklist. Internal resume state is generated for agents/scripts, but it is not a primary user document.
-
-Current default paths:
-
-- Google Drive and Gmail: well-known local Node MCP defaults for practical first-day browser login; official Google Workspace remote MCPs remain available when the company requires first-party remote MCPs and the selected client supports custom Google OAuth credentials.
-- GA4: official Google Analytics MCP through `analytics-mcp` and Google ADC/browser login.
-- Google Tag Manager: Stape remote OAuth MCP.
-- BigQuery: official Google Cloud remote BigQuery MCP. When a client cannot complete remote OAuth, the kit can use a short-lived ADC bearer token as a day-one bridge; Google MCP Toolbox for Databases remains the controlled fallback when local/allowlisted query tooling is required.
-- Browser QA: official Playwright MCP for journey testing, consent checks, ecommerce paths, forms, screenshots, and repeatable browser interaction. The helper detects installed/default browsers and can use Microsoft Edge instead of requiring Google Chrome.
-- Browser Debug: official Chrome DevTools MCP for optional advanced console, network, screenshot, and performance debugging. The helper can launch a compatible Chromium browser such as Microsoft Edge via executable path when Chrome is not installed.
-- ClickUp: official remote MCP.
-- Trello: current third-party candidate MCP.
-- Piano Analytics: official private-beta MCP, plus a Piano API connector fallback.
-- Contentsquare: official MCP.
-- Tag Commander / Commanders Act: API connector.
-
-Generated files and credentials stay local and are ignored by git. Do not reuse credentials from a previous employer or agency for a new company.
-
-User-facing generated files:
-
-- `generated/onboarding-report.md`: user-facing handover summary.
-- `generated/first-day-checklist.md`: user-facing next actions and read-only smoke tests.
-On-demand user-facing generated files:
-
-- `generated/credential-guide.md`: direct credential/setup URLs for the selected tools.
-- `generated/bigquery-safety-plan.md`: BigQuery dry-run and cost-safety checklist.
-- `generated/mcp-update-check.md`: selected MCP package/endpoint freshness check.
-
-The helper also keeps internal resume state for agents/scripts in `generated/onboarding-state.json`; you usually do not need to open it.
-
-Browser Debug can inspect browser content. Use it deliberately on logged-in, internal, or sensitive pages.
-
-See `docs/data-and-credential-safety.md` for the security model. If you need a request for IT, data, analytics engineering, or vendor admins, ask the agent to draft it during the conversation from the selected tools and current blockers.
-
-## Files
-
-Core reusable files:
-
-- `AGENTS.md`: the conversation workflow and analyst operating rules.
-- `scripts/WebAnalystSetup.ps1`: the PowerShell helper for prerequisites, MCP config, status, connection commands, Google OAuth helpers, and resets.
-- `config/mcp-catalog.json`: MCP/API catalog used by the helper.
-- `config/tool-selection.example.json`: default tool choices copied to local ignored `tool-selection.json`.
-- `config/tool-profiles.json`: dormant reusable onboarding profiles kept for future standard bundles; the default setup flow does not use them yet.
-- `config/client-capabilities.json`: client-specific config targets and reload/login guidance.
-- `secrets/.env.template`: copied to local ignored `secrets/.env.local`.
-- `schemas/*.schema.json`: schema documentation and validation targets for catalog/selection/profile files.
-- `tests/fixtures/profile-server-names.json`: expected MCP server names for reusable profiles.
-- `scripts/lib/*.ps1`: focused helper modules for release audit, catalog review, checklist generation, Pester tests, and fixture tests.
-- `docs/`: security guidance.
-- `.github/workflows/validate.yml`: GitHub Actions validation for releases and pull requests.
-- `.gitignore`: keeps credentials and generated machine-specific files out of the reusable kit.
-
-Local runtime files are disposable and ignored by git:
-
-- `config/tool-selection.json`
-- `secrets/.env.local`
-- `generated/*`
-- `.mcp.json`, `.codex/config.toml`, `.gemini/settings.json`
-
-## Manual Commands
-
-These commands are not required in normal use. The agent should run them for you during the conversation. They are kept here as a fallback when you want to debug, rerun a step, or understand what the agent is doing.
-
-- `Prepare`: creates local ignored files from templates.
-- `UseProfile`: dormant/manual helper that applies a reusable tool profile to local ignored `config/tool-selection.json`; the default setup flow does not use profiles yet.
-- `Validate`: validates reusable kit files, JSON, PowerShell syntax, catalog metadata, profiles, lifecycle metadata, and secret hygiene.
-- `Doctor`: prints a first-day readiness report for the machine, local state, prerequisites, browser, and selected tools.
-- `CredentialGuide`: writes an ignored credential guide with direct setup URLs for selected tools.
-- `BigQuerySafetyPlan`: writes an ignored BigQuery dry-run/cost-safety plan before query work.
-- `Prereqs`: checks and installs needed prerequisites such as Node.js, Git, Python/pipx, or Google Cloud CLI depending on selected providers.
-- `CheckMcpUpdates`: checks selected MCP packages, remote endpoint reachability, and catalog verification age before install/config generation.
-- `Apply`: writes MCP configuration for the selected AI client.
-- `Dashboard`: prints enabled tools, missing credentials, and reconnect/auth commands in the terminal.
-- `Status`: checks selected tool status, visible MCP client state, and lightweight Google token scope/API reachability where possible.
-- `FirstDayChecklist`: writes an ignored action checklist to `generated/first-day-checklist.md`.
-- `OnboardingReport`: writes an ignored handover report to `generated/onboarding-report.md`, machine-readable state to `generated/onboarding-state.json`, and the first-day checklist.
-- `CatalogReview`: writes an ignored catalog maintainability report to `generated/catalog-review.md`.
-- `TestFixtures`: checks reusable profile expectations against `tests/fixtures/profile-server-names.json`.
-- `PesterTests`: runs the maintainability test suite in `tests/WebAnalystSetup.Tests.ps1`.
-- `ReleaseAudit`: validates the kit, checks tracked files for local state or credential patterns, and builds an audit archive from git.
+Codex can also discover the repository as a skill when it is installed under its skills directory:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action Prepare
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action Validate
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action Doctor
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action CredentialGuide
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action Prereqs
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action CheckMcpUpdates
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action BigQuerySafetyPlan
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action Apply -Client Codex
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action Dashboard
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action Status
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action FirstDayChecklist
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action OnboardingReport
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action CatalogReview
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action TestFixtures
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action PesterTests
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action ReleaseAudit
+git clone https://github.com/HQ-Guillaume/web-analyst-mcp-setup.git "$env:USERPROFILE\.codex\skills\web-analyst-mcp-setup"
 ```
 
-Google helper commands:
+Then invoke it with:
+
+```text
+Use $web-analyst-mcp-setup to configure my selected web analyst tools.
+```
+
+The latest ZIP is also available from [GitHub Releases](https://github.com/HQ-Guillaume/web-analyst-mcp-setup/releases/latest).
+
+## What It Does
+
+The guided first-day flow:
+
+1. Selects AI clients and only the tools needed now.
+2. Inspects Windows, installed prerequisites, browsers, and existing MCP configuration.
+3. Chooses an approved provider and credential route from the catalog.
+4. Installs only prerequisites required by those choices.
+5. Checks current MCP packages and records exact local versions for reproducible launches.
+6. Previews configuration changes, backs up existing files, and applies only kit-owned entries.
+7. Opens or guides the required login flows.
+8. Verifies configuration, authentication, current-session visibility, and a harmless read-only call separately.
+9. Records human-verifiable evidence and produces a concise handover report and checklist.
+
+Near-functional MCPs are completed first. Tools requiring longer Google Cloud, IAM, or vendor-admin work remain clearly listed with their next action rather than blocking the rest of onboarding.
+
+The current tool and provider inventory, including officialness, runtime, authentication, data exposure, write capability, risk, lifecycle, and upstream source, is maintained in [`config/mcp-catalog.json`](config/mcp-catalog.json).
+
+## Safety Model
+
+- Read-only smoke tests are the default.
+- Delete, revoke, reset, deploy, publish, send, edit, and costly-query actions require explicit approval for the exact target.
+- `Apply -Preview` shows client paths and MCP names before configuration changes.
+- Existing client files are backed up before Apply or managed reset.
+- Unowned MCP names cause a collision error instead of being overwritten.
+- Reset removes only entries whose ownership can be proven; user-modified or unrelated entries are preserved.
+- Credentials, tokens, package locks, evidence, reports, backups, and machine-specific paths remain ignored by Git.
+- Third-party hosted MCPs must be disclosed before connecting company data.
+
+See [Data and Credential Safety](docs/data-and-credential-safety.md) for details.
+
+## User-Facing Outputs
+
+- `generated/onboarding-report.md`: configuration status, credential-key state, recorded verification proof, and handover notes.
+- `generated/first-day-checklist.md`: prioritized next actions and safe smoke tests.
+- `generated/credential-guide.md`: direct setup URLs generated only when credentials are missing.
+- `generated/bigquery-safety-plan.md`: optional dry-run and cost-safety checklist.
+- `generated/mcp-update-check.md`: package resolution, endpoint reachability, and catalog freshness evidence.
+
+Internal runtime files such as `generated/onboarding-state.json`, `generated/mcp-version-lock.json`, and the external ownership record are for agents and scripts. They are not primary user documents and are never released.
+
+## Project Structure
+
+- `SKILL.md`: installable skill workflow and safety contract.
+- `agents/openai.yaml`: Codex skill-list metadata.
+- `AGENTS.md`: lightweight compatibility entry for agents that discover repository instructions.
+- `scripts/WebAnalystSetup.ps1`: Windows setup and configuration engine.
+- `scripts/lib/`: focused reporting, audit, checklist, and test helpers.
+- `config/mcp-catalog.json`: provider source of truth.
+- `config/client-capabilities.json`: supported client configuration behavior.
+- `config/tool-selection.example.json`: clean template copied to ignored local selection.
+- `config/tool-profiles.json`: dormant/manual profile scaffolding, not used by default onboarding.
+- `secrets/.env.template`: clean template copied to ignored local credentials.
+- `schemas/`: reusable and runtime JSON contracts.
+- `tests/`: behavior, safety, compatibility, and fixture tests.
+- `.github/workflows/validate.yml`: Windows PowerShell and PowerShell 7 validation.
+
+## Manual Recovery Commands
+
+The agent normally runs these commands. They remain available for debugging or recovery:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action GoogleOAuthFile
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action GoogleAdcLogin
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action RefreshGoogleDriveToken
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action BigQueryAdcBearerToken
+# Prepare, inspect, and guide credentials
+.\scripts\WebAnalystSetup.ps1 -Action Prepare
+.\scripts\WebAnalystSetup.ps1 -Action Doctor
+.\scripts\WebAnalystSetup.ps1 -Action CredentialGuide
+
+# Install prerequisites and resolve exact MCP versions
+.\scripts\WebAnalystSetup.ps1 -Action Prereqs
+.\scripts\WebAnalystSetup.ps1 -Action CheckMcpUpdates
+
+# Preview and apply only to clients selected locally
+.\scripts\WebAnalystSetup.ps1 -Action Apply -Client Selected -Preview
+.\scripts\WebAnalystSetup.ps1 -Action Apply -Client Selected
+
+# Authenticate, inspect, and report
+.\scripts\WebAnalystSetup.ps1 -Action Dashboard
+.\scripts\WebAnalystSetup.ps1 -Action Status
+.\scripts\WebAnalystSetup.ps1 -Action OnboardingReport
 ```
 
-To reset Codex MCP configuration before testing the kit again:
+Record a successful read-only proof:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action ResetCodexMcp -ConfirmedMcpEndpointDeletion
+.\scripts\WebAnalystSetup.ps1 -Action RecordEvidence `
+  -ToolName googleAnalytics `
+  -Stage Verified `
+  -Outcome Passed `
+  -Target "Company GA4 property" `
+  -Evidence "Account summaries returned the intended property"
 ```
 
-During MCP setup, the agent should get explicit approval before running that command and state the exact MCP config targets.
-
-To reset the kit itself after a test, before sharing/compressing the reusable folder, or when leaving a company/client:
+Remove MCP configuration and local state only when intentionally disconnecting or ending a test:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action ResetKit
+.\scripts\WebAnalystSetup.ps1 -Action ResetMcpConfig -Client Selected -ConfirmedMcpEndpointDeletion
+.\scripts\WebAnalystSetup.ps1 -Action ResetKit
 ```
 
-Do not run `ResetKit` immediately after a successful real onboarding unless you intentionally want to remove the local credentials and tokens that keep the tools working. `ResetKit` removes ignored local state, known kit-owned Google OAuth/token JSON files under `%USERPROFILE%\.web-analyst-agent`, and the short-lived `BIGQUERY_MCP_ACCESS_TOKEN` user/process environment variable, so the folder can be compressed or reused without carrying the current PC/company connection forward.
+`ResetKit` alone does not delete MCP client configuration. This prevents a share/compression cleanup from disconnecting a real workstation.
 
-## Release Safety
+## Development And Releases
 
-Before publishing or sharing the kit, the agent should run:
+Before publishing:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action Validate
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action TestFixtures
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action PesterTests
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action CatalogReview
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action ReleaseAudit
+.\scripts\WebAnalystSetup.ps1 -Action Validate
+.\scripts\WebAnalystSetup.ps1 -Action TestFixtures
+.\scripts\WebAnalystSetup.ps1 -Action PesterTests
+.\scripts\WebAnalystSetup.ps1 -Action CatalogReview
+.\scripts\WebAnalystSetup.ps1 -Action ReleaseAudit
 ```
 
-`ReleaseAudit` checks only tracked files and a git archive, so ignored local credentials and generated reports are not included in the release artifact.
+The release audit scans tracked files and the exact Git archive for credentials, personal paths, generated runtime state, and forbidden local files. See [Contributing](CONTRIBUTING.md), [Security](SECURITY.md), and the [Changelog](CHANGELOG.md).

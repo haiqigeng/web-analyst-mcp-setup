@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Web Analyst MCP Exact Version Lock",
+  "type": "object",
+  "required": ["version", "entries"],
+  "properties": {
+    "version": { "const": 1 },
+    "generatedAt": { "type": "string" },
+    "entries": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["tool", "provider", "runner", "packageName", "version", "resolvedPackage", "checkedAt"],
+        "properties": {
+          "tool": { "type": "string" },
+          "provider": { "type": "string" },
+          "runner": { "enum": ["npx", "pipx"] },
+          "packageName": { "type": "string" },
+          "version": { "type": "string" },
+          "resolvedPackage": { "type": "string" },
+          "checkedAt": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

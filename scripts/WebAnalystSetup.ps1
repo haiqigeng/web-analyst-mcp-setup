@@ -1,10 +1,10 @@
 [CmdletBinding()]
 param(
-    [ValidateSet("Prepare", "UseProfile", "Validate", "Doctor", "CredentialGuide", "BigQuerySafetyPlan", "FirstDayChecklist", "OnboardingReport", "ReleaseAudit", "CatalogReview", "TestFixtures", "PesterTests", "Prereqs", "CheckMcpUpdates", "Generate", "Apply", "Status", "Dashboard", "RunMcp", "GoogleOAuthFile", "GoogleAdcLogin", "RefreshGoogleDriveToken", "BigQueryAdcBearerToken", "ResetKit", "ResetCodexMcp", "All")]
+    [ValidateSet("Prepare", "UseProfile", "Validate", "Doctor", "CredentialGuide", "BigQuerySafetyPlan", "FirstDayChecklist", "OnboardingReport", "RecordEvidence", "ReleaseAudit", "CatalogReview", "TestFixtures", "PesterTests", "Prereqs", "CheckMcpUpdates", "Generate", "Apply", "Status", "Dashboard", "RunMcp", "GoogleOAuthFile", "GoogleAdcLogin", "RefreshGoogleDriveToken", "BigQueryAdcBearerToken", "ResetKit", "ResetMcpConfig", "ResetCodexMcp", "All")]
     [string]$Action = "Status",
 
-    [ValidateSet("All", "Codex", "Claude", "Gemini")]
-    [string]$Client = "All",
+    [ValidateSet("Selected", "All", "Codex", "Claude", "Gemini")]
+    [string]$Client = "Selected",
 
     [string]$Profile,
     [string]$ServerName,
@@ -14,6 +14,15 @@ param(
     [string[]]$McpArgs = @(),
     [string]$McpArgsJson,
     [string]$McpArgsBase64,
+    [string]$ToolName,
+    [ValidateSet("Configured", "Authenticated", "Visible", "Verified")]
+    [string]$Stage,
+    [ValidateSet("Passed", "Failed", "Pending")]
+    [string]$Outcome,
+    [string]$Target,
+    [string]$Evidence,
+    [switch]$Preview,
+    [switch]$AllCatalogProviders,
     [switch]$InstallPython,
     [switch]$ConfirmedMcpEndpointDeletion
 )
@@ -28,6 +37,10 @@ $ClientCapabilitiesPath = Join-Path $Root "config\client-capabilities.json"
 $EnvPath = Join-Path $Root "secrets\.env.local"
 $EnvTemplatePath = Join-Path $Root "secrets\.env.template"
 $GeneratedDir = Join-Path $Root "generated"
+$OnboardingStatePath = Join-Path $GeneratedDir "onboarding-state.json"
+$VersionLockPath = Join-Path $GeneratedDir "mcp-version-lock.json"
+$OwnershipRoot = Join-Path $env:USERPROFILE ".web-analyst-agent\config-ownership"
+$InstallationIdPath = Join-Path $Root ".web-analyst-installation-id"
 $ScriptPath = $MyInvocation.MyCommand.Path
 $LibDir = Join-Path $PSScriptRoot "lib"
 
@@ -99,17 +112,17 @@ function ConvertTo-Hashtable {
         if ($null -eq $InputObject) { return $null }
         if ($InputObject -is [System.Collections.IDictionary]) {
             $hash = @{}
-            foreach ($key in $InputObject.Keys) { $hash[$key] = ConvertTo-Hashtable $InputObject[$key] }
+            foreach ($key in $InputObject.Keys) { $hash[$key] = ConvertTo-Hashtable -InputObject ($InputObject[$key]) }
             return $hash
         }
         if ($InputObject -is [System.Collections.IEnumerable] -and $InputObject -isnot [string]) {
             $array = @()
-            foreach ($item in $InputObject) { $array += ConvertTo-Hashtable $item }
-            return $array
+            foreach ($item in $InputObject) { $array += ConvertTo-Hashtable -InputObject $item }
+            return ,$array
         }
         if ($InputObject.PSObject.Properties.Count -gt 0 -and $InputObject.GetType().Name -eq "PSCustomObject") {
             $hash = @{}
-            foreach ($prop in $InputObject.PSObject.Properties) { $hash[$prop.Name] = ConvertTo-Hashtable $prop.Value }
+            foreach ($prop in $InputObject.PSObject.Properties) { $hash[$prop.Name] = ConvertTo-Hashtable -InputObject $prop.Value }
             return $hash
         }
         return $InputObject
@@ -153,6 +166,233 @@ function Read-JsonFile {
         throw "Missing JSON file: $Path"
     }
     return Get-Content -Raw -LiteralPath $Path | ConvertFrom-Json
+}
+
+function ConvertTo-CanonicalJson {
+    param($InputObject)
+
+    if ($null -eq $InputObject) { return "null" }
+    if ($InputObject -is [System.Collections.IDictionary]) {
+        $parts = foreach ($key in @($InputObject.Keys | Sort-Object)) {
+            $keyJson = ConvertTo-Json -InputObject ([string]$key) -Compress
+            $valueJson = ConvertTo-CanonicalJson -InputObject ($InputObject[$key])
+            "$keyJson`:$valueJson"
+        }
+        return "{" + ($parts -join ",") + "}"
+    }
+    if ($InputObject -is [PSCustomObject]) {
+        $parts = foreach ($property in @($InputObject.PSObject.Properties | Sort-Object Name)) {
+            $keyJson = ConvertTo-Json -InputObject $property.Name -Compress
+            $valueJson = ConvertTo-CanonicalJson -InputObject $property.Value
+            "$keyJson`:$valueJson"
+        }
+        return "{" + ($parts -join ",") + "}"
+    }
+    if ($InputObject -is [System.Collections.IEnumerable] -and $InputObject -isnot [string]) {
+        $parts = foreach ($item in $InputObject) { ConvertTo-CanonicalJson -InputObject $item }
+        return "[" + ($parts -join ",") + "]"
+    }
+    return ConvertTo-Json -InputObject $InputObject -Compress
+}
+
+function Get-ObjectFingerprint {
+    param($InputObject)
+    $canonical = ConvertTo-CanonicalJson -InputObject $InputObject
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($canonical)
+        return ([BitConverter]::ToString($sha.ComputeHash($bytes))).Replace("-", "").ToLowerInvariant()
+    } finally {
+        $sha.Dispose()
+    }
+}
+
+function Get-OwnershipStatePath {
+    return Join-Path $OwnershipRoot ((Get-InstallationId) + ".json")
+}
+
+function Get-InstallationId {
+    param([string]$Path = $InstallationIdPath)
+    if (Test-Path -LiteralPath $Path) {
+        $existingId = (Get-Content -Raw -LiteralPath $Path).Trim()
+        $parsed = [Guid]::Empty
+        if ([Guid]::TryParse($existingId, [ref]$parsed)) { return $parsed.ToString() }
+    }
+    $newId = [Guid]::NewGuid().ToString()
+    Set-Content -LiteralPath $Path -Value $newId -Encoding ASCII
+    return $newId
+}
+
+function Read-OwnershipState {
+    $path = Get-OwnershipStatePath
+    if (-not (Test-Path -LiteralPath $path)) {
+        return @{
+            version = 1
+            kitRoot = [string]$Root
+            clients = @{}
+        }
+    }
+    return ConvertTo-Hashtable (Read-JsonFile -Path $path)
+}
+
+function Write-OwnershipState {
+    param($State)
+    New-Item -ItemType Directory -Force $OwnershipRoot | Out-Null
+    $State["version"] = 1
+    $State["kitRoot"] = [string]$Root
+    $State["updatedAt"] = (Get-Date).ToString("o")
+    Write-JsonFile -Object $State -Path (Get-OwnershipStatePath)
+}
+
+function New-ConfigBackup {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return $null }
+    $stamp = Get-Date -Format "yyyyMMdd-HHmmss-fff"
+    $backup = "$Path.web-analyst-backup-$stamp"
+    Copy-Item -LiteralPath $Path -Destination $backup
+    return $backup
+}
+
+function Resolve-TargetClients {
+    param($Selection, [string]$RequestedClient = $Client)
+
+    if ($RequestedClient -eq "All") { return @("Codex", "Claude", "Gemini") }
+    if ($RequestedClient -ne "Selected") { return @($RequestedClient) }
+
+    $targets = @()
+    if ($Selection.aiClients.codex) { $targets += "Codex" }
+    if ($Selection.aiClients.claudeCode) { $targets += "Claude" }
+    if ($Selection.aiClients.geminiCli) { $targets += "Gemini" }
+    if ($targets.Count -eq 0) {
+        throw "No AI clients are selected in config\tool-selection.json."
+    }
+    return $targets
+}
+
+function Get-ClientConfigTarget {
+    param([string]$ClientName, $Selection)
+    $scope = [string]$Selection.installScope
+    if ([string]::IsNullOrWhiteSpace($scope)) { $scope = "user" }
+
+    switch ($ClientName) {
+        "Codex" {
+            $directory = if ($scope -eq "project") { Join-Path $Root ".codex" } else { Join-Path $env:USERPROFILE ".codex" }
+            return Join-Path $directory "config.toml"
+        }
+        "Claude" { return Join-Path $Root ".mcp.json" }
+        "Gemini" {
+            $directory = if ($scope -eq "project") { Join-Path $Root ".gemini" } else { Join-Path $env:USERPROFILE ".gemini" }
+            return Join-Path $directory "settings.json"
+        }
+        default { throw "Unsupported client target: $ClientName" }
+    }
+}
+
+function Read-OnboardingState {
+    param([string]$Path = $OnboardingStatePath)
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return @{
+            version = 2
+            toolEvidence = @{}
+        }
+    }
+    $state = ConvertTo-Hashtable (Read-JsonFile -Path $Path)
+    if (-not $state.ContainsKey("toolEvidence") -or $null -eq $state["toolEvidence"]) { $state["toolEvidence"] = @{} }
+    foreach ($toolKey in @($state["toolEvidence"].Keys)) {
+        $toolEntry = $state["toolEvidence"][$toolKey]
+        if (-not $toolEntry.ContainsKey("provider")) { $toolEntry["provider"] = "" }
+        if (-not $toolEntry.ContainsKey("stages") -or $null -eq $toolEntry["stages"]) { $toolEntry["stages"] = @{} }
+        foreach ($stageKey in @($toolEntry["stages"].Keys)) {
+            $stageEntry = $toolEntry["stages"][$stageKey]
+            $complete = $stageEntry.ContainsKey("outcome") -and $stageEntry.ContainsKey("recordedAt") -and $stageEntry.ContainsKey("target") -and $stageEntry.ContainsKey("evidence")
+            if (-not $complete) {
+                $toolEntry["stages"][$stageKey] = @{
+                    outcome = "Pending"
+                    recordedAt = (Get-Date).ToString("o")
+                    target = ""
+                    evidence = "Legacy evidence was incomplete; repeat this check."
+                }
+            }
+        }
+    }
+    return $state
+}
+
+function Write-OnboardingState {
+    param($State, [string]$Path = $OnboardingStatePath)
+    $stateDirectory = Split-Path -Parent $Path
+    if ($stateDirectory) { New-Item -ItemType Directory -Force $stateDirectory | Out-Null }
+    $State["version"] = 2
+    $State["updatedAt"] = (Get-Date).ToString("o")
+    Write-JsonFile -Object $State -Path $Path
+}
+
+function Get-CurrentToolProvider {
+    param([string]$RequestedToolName)
+    $selection = Read-JsonFile -Path $SelectionPath
+    if (-not (Test-ObjectProperty -Object $selection.tools -Name $RequestedToolName)) {
+        throw "Unknown tool '$RequestedToolName' in config\tool-selection.json."
+    }
+    return [string]$selection.tools.($RequestedToolName).provider
+}
+
+function Get-ToolEvidenceEntry {
+    param([string]$RequestedToolName, [string]$Provider)
+    $state = Read-OnboardingState
+    if (-not $state["toolEvidence"].ContainsKey($RequestedToolName)) { return $null }
+    $entry = $state["toolEvidence"][$RequestedToolName]
+    if ($entry.ContainsKey("provider") -and [string]$entry["provider"] -ne $Provider) { return $null }
+    return $entry
+}
+
+function Format-EvidenceStage {
+    param($ToolEvidence, [string]$RequestedStage, [string]$PendingText)
+    if (-not $ToolEvidence -or -not $ToolEvidence.ContainsKey("stages") -or -not $ToolEvidence["stages"].ContainsKey($RequestedStage)) {
+        return $PendingText
+    }
+    $stageEntry = $ToolEvidence["stages"][$RequestedStage]
+    $result = [string]$stageEntry["outcome"]
+    if ($stageEntry["recordedAt"]) {
+        $recordedAt = [DateTimeOffset]::MinValue
+        if ([DateTimeOffset]::TryParse([string]$stageEntry["recordedAt"], [ref]$recordedAt)) {
+            $result += " " + $recordedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
+        }
+    }
+    if ($stageEntry["target"]) { $result += " - " + [string]$stageEntry["target"] }
+    return $result
+}
+
+function Invoke-RecordEvidence {
+    Ensure-LocalFiles | Out-Null
+    if ([string]::IsNullOrWhiteSpace($ToolName) -or [string]::IsNullOrWhiteSpace($Stage) -or [string]::IsNullOrWhiteSpace($Outcome)) {
+        throw "RecordEvidence requires -ToolName, -Stage, and -Outcome."
+    }
+    if ($Evidence -match "GOCSPX|ya29\.|1//|github_pat_|ghp_|private_key") {
+        throw "Evidence looks like it may contain a credential. Record a short human-verifiable summary, never a token or secret."
+    }
+    if ($Stage -eq "Verified" -and $Outcome -eq "Passed" -and [string]::IsNullOrWhiteSpace($Evidence)) {
+        throw "A passed verification requires a short -Evidence summary."
+    }
+
+    $provider = Get-CurrentToolProvider -RequestedToolName $ToolName
+    $state = Read-OnboardingState
+    if (-not $state["toolEvidence"].ContainsKey($ToolName)) {
+        $state["toolEvidence"][$ToolName] = @{ provider = $provider; stages = @{} }
+    }
+    $toolEntry = $state["toolEvidence"][$ToolName]
+    if ([string]$toolEntry["provider"] -ne $provider) {
+        $toolEntry = @{ provider = $provider; stages = @{} }
+        $state["toolEvidence"][$ToolName] = $toolEntry
+    }
+    if (-not $toolEntry.ContainsKey("stages")) { $toolEntry["stages"] = @{} }
+    $toolEntry["stages"][$Stage] = @{
+        outcome = $Outcome
+        recordedAt = (Get-Date).ToString("o")
+        target = $Target
+        evidence = $Evidence
+    }
+    Write-OnboardingState -State $state
+    Write-Host "Recorded $Stage evidence for $ToolName [$provider]: $Outcome"
 }
 
 function Get-PropertyNames {
@@ -253,6 +493,19 @@ function Get-ToolStatusRows {
             }
         }
 
+        $providerName = if ($item.selectedProvider) { [string]$item.selectedProvider } else { [string]$tool.Value.provider }
+        $toolEvidence = Get-ToolEvidenceEntry -RequestedToolName $tool.Name -Provider $providerName
+        $configuredState = if ($enabled) { "Selected" } else { "Not selected" }
+        $allConfigured = $false
+        if ($enabled -and $item.kind -eq "mcp") {
+            $configurationCheck = Get-McpConfiguredSummary -Selection $selection -ServerName ([string]$item.serverName)
+            $configuredState = $configurationCheck.Summary
+            $allConfigured = [bool]$configurationCheck.AllConfigured
+        } elseif ($enabled -and $item.kind -eq "api") {
+            $configuredState = "API connector selected"
+            $allConfigured = $true
+        }
+
         $status = if ($enabled) { "Selected" } else { "Available" }
         $nextStep = [string]$item.testPrompt
         if ($enabled -and $missing.Count -gt 0) {
@@ -278,6 +531,11 @@ function Get-ToolStatusRows {
             }
         }
 
+        if ($enabled -and $item.kind -eq "mcp" -and -not $allConfigured) {
+            $status = "Needs configuration"
+            $nextStep = "Run Apply for the selected AI client, then reload it if needed."
+        }
+
         $authenticated = "Unknown"
         if ($item.authMode -eq "none" -and $credentialState -eq "No credentials required") {
             $authenticated = "No auth needed"
@@ -293,21 +551,29 @@ function Get-ToolStatusRows {
             $authenticated = "Needs login check"
         }
 
+        $authenticated = Format-EvidenceStage -ToolEvidence $toolEvidence -RequestedStage "Authenticated" -PendingText $authenticated
+        $visible = Format-EvidenceStage -ToolEvidence $toolEvidence -RequestedStage "Visible" -PendingText "Pending current-session tool check"
+        $verified = Format-EvidenceStage -ToolEvidence $toolEvidence -RequestedStage "Verified" -PendingText "Pending read-only proof"
+        if ($toolEvidence -and $toolEvidence.ContainsKey("stages") -and $toolEvidence["stages"].ContainsKey("Verified") -and [string]$toolEvidence["stages"]["Verified"]["outcome"] -eq "Passed") {
+            $status = "Verified"
+            $nextStep = "Connection proof is recorded. Re-test only after credentials, provider, or client configuration changes."
+        }
+
         $rows += [PSCustomObject]@{
             Tool = $tool.Name
             DisplayName = [string]$item.displayName
             Enabled = $enabled
-            Provider = if ($item.selectedProvider) { [string]$item.selectedProvider } else { [string]$tool.Value.provider }
+            Provider = $providerName
             Kind = [string]$item.kind
             Runtime = [string]$item.runtime
             Auth = [string]$item.authMode
             CredentialState = $credentialState
             Status = $status
             NextStep = $nextStep
-            Configured = if ($enabled) { "Selected; run Apply if config changed" } else { "Not selected" }
+            Configured = $configuredState
             Authenticated = $authenticated
-            Visible = "Check active client after Apply/reload"
-            Verified = "Pending read-only proof"
+            Visible = $visible
+            Verified = $verified
             WriteCapability = [string]$item.writeCapability
             Risk = [string]$item.riskLevel
         }
@@ -623,6 +889,59 @@ function Get-NpmLookupName {
     return $name
 }
 
+function Get-VersionLockKey {
+    param([string]$ToolName, [string]$Provider)
+    if ([string]::IsNullOrWhiteSpace($Provider)) { $Provider = "default" }
+    return "$ToolName|$Provider"
+}
+
+function Read-VersionLock {
+    param([string]$Path = $VersionLockPath)
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return @{ version = 1; entries = @{} }
+    }
+    $lock = ConvertTo-Hashtable (Read-JsonFile -Path $Path)
+    if (-not $lock.ContainsKey("entries") -or $null -eq $lock["entries"]) { $lock["entries"] = @{} }
+    return $lock
+}
+
+function Write-VersionLock {
+    param($Lock)
+    New-Item -ItemType Directory -Force $GeneratedDir | Out-Null
+    $Lock["version"] = 1
+    $Lock["generatedAt"] = (Get-Date).ToString("o")
+    Write-JsonFile -Object $Lock -Path $VersionLockPath
+}
+
+function New-VersionedPackageSpec {
+    param([string]$Runner, [string]$PackageName, [string]$Version)
+    if ($Runner -eq "pipx") { return "$PackageName==$Version" }
+    return "$PackageName@$Version"
+}
+
+function Resolve-LockedPackageSpec {
+    param([string]$ToolName, $Item, [switch]$AllowUnlocked, [string]$LockPath = $VersionLockPath)
+
+    $package = [string]$Item.package
+    if ([string]::IsNullOrWhiteSpace($package)) { return $package }
+    $runner = [string]$Item.runner
+    if ($runner -notin @("npx", "pipx")) { return $package }
+
+    $provider = if ($Item.selectedProvider) { [string]$Item.selectedProvider } else { "default" }
+    $lock = Read-VersionLock -Path $LockPath
+    $key = Get-VersionLockKey -ToolName $ToolName -Provider $provider
+    if ($lock["entries"].ContainsKey($key)) {
+        $entry = $lock["entries"][$key]
+        $expectedName = if ($runner -eq "npx") { Get-NpmLookupName -PackageName $package } else { $package -replace "==.*$", "" }
+        if ([string]$entry["packageName"] -eq $expectedName -and -not [string]::IsNullOrWhiteSpace([string]$entry["resolvedPackage"])) {
+            return [string]$entry["resolvedPackage"]
+        }
+    }
+
+    if ($AllowUnlocked) { return $null }
+    throw "No exact package lock exists for $ToolName [$provider]. Run -Action CheckMcpUpdates before Apply or launching this MCP."
+}
+
 function Invoke-PipxRun {
     param([string]$PackageName, [string[]]$Args = @())
 
@@ -823,6 +1142,8 @@ function Invoke-ValidateKit {
     $requiredFiles = @(
         "README.md",
         "AGENTS.md",
+        "SKILL.md",
+        "agents\openai.yaml",
         ".gitignore",
         "config\mcp-catalog.json",
         "config\tool-selection.example.json",
@@ -839,6 +1160,8 @@ function Invoke-ValidateKit {
         "schemas\tool-selection.schema.json",
         "schemas\tool-profiles.schema.json",
         "schemas\client-capabilities.schema.json",
+        "schemas\onboarding-state.schema.json",
+        "schemas\mcp-version-lock.schema.json",
         "tests\fixtures\profile-server-names.json",
         "tests\WebAnalystSetup.Tests.ps1",
         "docs\data-and-credential-safety.md",
@@ -854,7 +1177,7 @@ function Invoke-ValidateKit {
     $selectionExample = $null
     $profiles = $null
     $clientCapabilities = $null
-    foreach ($relative in @("config\mcp-catalog.json", "config\tool-selection.example.json", "config\tool-profiles.json", "config\client-capabilities.json", "tests\fixtures\profile-server-names.json", "schemas\mcp-catalog.schema.json", "schemas\tool-selection.schema.json", "schemas\tool-profiles.schema.json", "schemas\client-capabilities.schema.json")) {
+    foreach ($relative in @("config\mcp-catalog.json", "config\tool-selection.example.json", "config\tool-profiles.json", "config\client-capabilities.json", "tests\fixtures\profile-server-names.json", "schemas\mcp-catalog.schema.json", "schemas\tool-selection.schema.json", "schemas\tool-profiles.schema.json", "schemas\client-capabilities.schema.json", "schemas\onboarding-state.schema.json", "schemas\mcp-version-lock.schema.json")) {
         $path = Join-Path $Root $relative
         if (Test-Path -LiteralPath $path) {
             try {
@@ -866,6 +1189,21 @@ function Invoke-ValidateKit {
             } catch {
                 $errors += "Invalid JSON in $relative`: $($_.Exception.Message)"
             }
+        }
+    }
+
+    $skillPath = Join-Path $Root "SKILL.md"
+    if (Test-Path -LiteralPath $skillPath) {
+        $skillText = Get-Content -Raw -LiteralPath $skillPath
+        if ($skillText -notmatch "(?s)^---\s*\r?\nname:\s*web-analyst-mcp-setup\s*\r?\ndescription:\s*.+?\r?\n---") {
+            $errors += "SKILL.md must contain only name and description in valid YAML frontmatter."
+        }
+    }
+    $openAiMetadataPath = Join-Path $Root "agents\openai.yaml"
+    if (Test-Path -LiteralPath $openAiMetadataPath) {
+        $openAiMetadata = Get-Content -Raw -LiteralPath $openAiMetadataPath
+        if ($openAiMetadata -notmatch "display_name:" -or $openAiMetadata -notmatch "short_description:" -or $openAiMetadata -notmatch '\$web-analyst-mcp-setup') {
+            $errors += "agents\openai.yaml is missing required skill interface metadata."
         }
     }
 
@@ -881,7 +1219,7 @@ function Invoke-ValidateKit {
     }
 
     if ($catalog) {
-        $requiredCatalogFields = @("displayName", "kind", "trustLevel", "lifecycleStatus", "recommendedUse", "fallbackWhen", "knownLimitations", "officialness", "authFriction", "runtime", "dataExposure", "writeCapability", "riskLevel", "lastVerified", "author", "source", "authMode", "serverName", "credentialKeys", "notes", "testPrompt")
+        $requiredCatalogFields = @("displayName", "kind", "trustLevel", "lifecycleStatus", "recommendedUse", "fallbackWhen", "knownLimitations", "officialness", "authFriction", "runtime", "dataExposure", "writeCapability", "riskLevel", "lastVerified", "author", "source", "authMode", "serverName", "defaultProvider", "credentialKeys", "notes", "testPrompt")
         $validLifecycleStatuses = @("default", "fallback", "optional", "candidate", "private-beta", "api-fallback", "deprecated")
         foreach ($entry in $catalog.PSObject.Properties) {
             $item = $entry.Value
@@ -965,7 +1303,7 @@ function Invoke-ValidateKit {
     $gitignore = Join-Path $Root ".gitignore"
     if (Test-Path -LiteralPath $gitignore) {
         $ignoreText = Get-Content -Raw -LiteralPath $gitignore
-        foreach ($pattern in @("secrets/*", "!secrets/.env.template", "config/tool-selection.json", "generated/*")) {
+        foreach ($pattern in @("secrets/*", "!secrets/.env.template", "config/tool-selection.json", "generated/*", "*.web-analyst-backup-*")) {
             if ($ignoreText -notmatch [regex]::Escape($pattern)) {
                 $errors += ".gitignore does not protect '$pattern'."
             }
@@ -1071,13 +1409,13 @@ function Invoke-Doctor {
 function Invoke-OnboardingReport {
     New-Item -ItemType Directory -Force $GeneratedDir | Out-Null
     $reportPath = Join-Path $GeneratedDir "onboarding-report.md"
-    $statePath = Join-Path $GeneratedDir "onboarding-state.json"
     $selectionFile = if (Test-Path -LiteralPath $SelectionPath) { $SelectionPath } else { $SelectionExamplePath }
     $selection = Read-JsonFile -Path $selectionFile
     $catalog = Read-JsonFile -Path $CatalogPath
     $toolRows = @(Get-ToolStatusRows -UseExampleWhenLocalSelectionMissing)
     $enabledRows = @($toolRows | Where-Object { $_.Enabled })
     $envMap = Import-DotEnvMap -Path $EnvPath
+    $evidenceState = Read-OnboardingState
     $generatedAt = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss zzz")
     $profileName = if (Test-ObjectProperty -Object $selection -Name "profile") { [string]$selection.profile } else { "" }
     if ([string]::IsNullOrWhiteSpace($profileName)) { $profileName = "custom or not selected" }
@@ -1110,6 +1448,33 @@ function Invoke-OnboardingReport {
         $lines += "| --- | --- | --- | --- | --- | --- | --- |"
         foreach ($row in $enabledRows) {
             $lines += "| $($row.DisplayName) | $($row.Provider) | $($row.Configured) | $($row.Authenticated) | $($row.Visible) | $($row.Verified) | $($row.NextStep -replace '\|', '/') |"
+        }
+    }
+
+    $lines += ""
+    $lines += "## Recorded Verification Evidence"
+    $lines += ""
+    $verifiedEvidence = @()
+    foreach ($row in $enabledRows) {
+        if (-not $evidenceState["toolEvidence"].ContainsKey($row.Tool)) { continue }
+        $toolEntry = $evidenceState["toolEvidence"][$row.Tool]
+        if (-not $toolEntry.ContainsKey("stages") -or -not $toolEntry["stages"].ContainsKey("Verified")) { continue }
+        $entry = $toolEntry["stages"]["Verified"]
+        if ([string]$entry["outcome"] -ne "Passed") { continue }
+        $verifiedEvidence += [PSCustomObject]@{
+            Tool = $row.DisplayName
+            Target = [string]$entry["target"]
+            Evidence = [string]$entry["evidence"]
+            Recorded = [string]$entry["recordedAt"]
+        }
+    }
+    if ($verifiedEvidence.Count -eq 0) {
+        $lines += "No passed read-only verification has been recorded yet."
+    } else {
+        $lines += "| Tool | Target | Human-verifiable proof | Recorded |"
+        $lines += "| --- | --- | --- | --- |"
+        foreach ($entry in $verifiedEvidence) {
+            $lines += "| $($entry.Tool) | $($entry.Target -replace '\|', '/') | $($entry.Evidence -replace '\|', '/') | $($entry.Recorded) |"
         }
     }
 
@@ -1166,11 +1531,11 @@ function Invoke-OnboardingReport {
     $lines += "- During MCP setup, delete or publish actions related to MCP endpoints require explicit approval and an exact target ID/name."
 
     Set-Content -LiteralPath $reportPath -Value $lines -Encoding UTF8
-    $state = [PSCustomObject]@{
-        generatedAt = $generatedAt
-        profile = $profileName
-        sourceSelectionFile = $selectionFile.Substring($Root.Path.Length + 1)
-        selectedTools = @($enabledRows | ForEach-Object {
+    $state = Read-OnboardingState
+    $state["generatedAt"] = $generatedAt
+    $state["profile"] = $profileName
+    $state["sourceSelectionFile"] = $selectionFile.Substring($Root.Path.Length + 1)
+    $state["selectedTools"] = @($enabledRows | ForEach-Object {
             [PSCustomObject]@{
                 tool = $_.Tool
                 displayName = $_.DisplayName
@@ -1187,18 +1552,17 @@ function Invoke-OnboardingReport {
                 nextStep = $_.NextStep
             }
         })
-        credentialKeys = @($credentialKeys)
-        reminders = @(
-            "Keep local credentials and tokens after a real onboarding so daily tools keep working.",
-            "Run ResetKit only after a test, when leaving a client/company, or before sharing the reusable folder.",
-            "Confirm before using write-capable MCPs, costly BigQuery queries, or browser tools on sensitive logged-in pages.",
-            "During MCP setup, delete or publish actions related to MCP endpoints require explicit approval and an exact target ID/name."
-        )
-    }
-    Write-JsonFile -Object $state -Path $statePath
+    $state["credentialKeys"] = @($credentialKeys)
+    $state["reminders"] = @(
+        "Keep local credentials and tokens after a real onboarding so daily tools keep working.",
+        "Run ResetKit only after a test, when leaving a client/company, or before sharing the reusable folder.",
+        "Confirm before using write-capable MCPs, costly BigQuery queries, or browser tools on sensitive logged-in pages.",
+        "During MCP setup, delete or publish actions related to MCP endpoints require explicit approval and an exact target ID/name."
+    )
+    Write-OnboardingState -State $state
     Invoke-FirstDayChecklist
     Write-Host "Wrote onboarding report: $reportPath"
-    Write-Host "Wrote onboarding state for agents/scripts: $statePath"
+    Write-Host "Updated onboarding evidence/resume state: $OnboardingStatePath"
 }
 
 function Get-SelectedCatalogItems {
@@ -1213,6 +1577,27 @@ function Get-SelectedCatalogItems {
         $items += [PSCustomObject]@{
             ToolName = $tool.Name
             Item = $item
+        }
+    }
+    return $items
+}
+
+function Get-AllCatalogMcpItems {
+    $catalog = Read-JsonFile -Path $CatalogPath
+    $items = @()
+    foreach ($entry in $catalog.PSObject.Properties) {
+        $defaultProvider = if ($entry.Value.defaultProvider) { [string]$entry.Value.defaultProvider } else { "default" }
+        $defaultItem = Resolve-CatalogItem -CatalogItem $entry.Value -Provider $defaultProvider
+        if ($defaultItem -and $defaultItem.kind -eq "mcp") {
+            $items += [PSCustomObject]@{ ToolName = $entry.Name; Item = $defaultItem }
+        }
+        if ($entry.Value.providers) {
+            foreach ($provider in $entry.Value.providers.PSObject.Properties) {
+                $providerItem = Resolve-CatalogItem -CatalogItem $entry.Value -Provider $provider.Name
+                if ($providerItem -and $providerItem.kind -eq "mcp") {
+                    $items += [PSCustomObject]@{ ToolName = $entry.Name; Item = $providerItem }
+                }
+            }
         }
     }
     return $items
@@ -1282,6 +1667,17 @@ function New-McpUpdateResult {
     }
 }
 
+function Get-CatalogReviewWindowDays {
+    param([string]$LifecycleStatus)
+    switch ($LifecycleStatus) {
+        { $_ -in @("candidate", "private-beta") } { return 30 }
+        { $_ -in @("default", "fallback") } { return 60 }
+        { $_ -in @("optional", "api-fallback") } { return 90 }
+        "deprecated" { return 180 }
+        default { return 60 }
+    }
+}
+
 function Get-CatalogFreshnessStatus {
     param($Item)
     $lastVerified = [DateTime]::MinValue
@@ -1289,9 +1685,10 @@ function Get-CatalogFreshnessStatus {
         return "Invalid lastVerified: $($Item.lastVerified)"
     }
     $ageDays = [int]((Get-Date) - $lastVerified).TotalDays
-    if ($ageDays -gt 180) { return "Stale: verified $ageDays days ago" }
-    if ($ageDays -gt 90) { return "Aging: verified $ageDays days ago" }
-    return "Fresh: verified $ageDays days ago"
+    $reviewDays = Get-CatalogReviewWindowDays -LifecycleStatus ([string]$Item.lifecycleStatus)
+    if ($ageDays -gt ($reviewDays * 2)) { return "Stale: verified $ageDays days ago; $reviewDays-day review window" }
+    if ($ageDays -gt $reviewDays) { return "Aging: verified $ageDays days ago; $reviewDays-day review window" }
+    return "Fresh: verified $ageDays days ago; $reviewDays-day review window"
 }
 
 function Get-McpEndpointUrl {
@@ -1358,9 +1755,10 @@ function Write-McpUpdateReport {
 }
 
 function Invoke-CheckMcpUpdates {
-    $selectedItems = @(Get-SelectedCatalogItems | Where-Object { $_.Item.kind -eq "mcp" })
+    $selectedItems = if ($AllCatalogProviders) { @(Get-AllCatalogMcpItems) } else { @(Get-SelectedCatalogItems | Where-Object { $_.Item.kind -eq "mcp" }) }
     $envMap = Import-DotEnvMap -Path $EnvPath
     $rows = @()
+    $lock = Read-VersionLock
 
     Write-Step "Checking MCP package updates"
     if ($selectedItems.Count -eq 0) {
@@ -1421,8 +1819,18 @@ function Invoke-CheckMcpUpdates {
                 if ([string]::IsNullOrWhiteSpace($latest)) { throw "npm did not return a version" }
 
                 $mode = if ([string]$item.package -match '@latest$') { "uses @latest" } else { "not pinned to @latest" }
-                $status = if ($mode -eq "uses @latest") { "OK" } else { "Review" }
-                $rows += New-McpUpdateResult -Tool $tool -Provider $provider -Check "npm package" -Status $status -Detail "npm $lookupName latest $latest; configured $($item.package) ($mode)."
+                $resolvedPackage = New-VersionedPackageSpec -Runner "npx" -PackageName $lookupName -Version $latest
+                $key = Get-VersionLockKey -ToolName $tool -Provider $provider
+                $lock["entries"][$key] = @{
+                    tool = $tool
+                    provider = $provider
+                    runner = "npx"
+                    packageName = $lookupName
+                    version = $latest
+                    resolvedPackage = $resolvedPackage
+                    checkedAt = (Get-Date).ToString("o")
+                }
+                $rows += New-McpUpdateResult -Tool $tool -Provider $provider -Check "npm package" -Status "Locked" -Detail "npm latest $latest; exact launch package $resolvedPackage ($mode)."
             } catch {
                 $rows += New-McpUpdateResult -Tool $tool -Provider $provider -Check "npm package" -Status "Check" -Detail "Could not check npm package $lookupName. Verify the package source before installing."
             }
@@ -1430,20 +1838,23 @@ function Invoke-CheckMcpUpdates {
         }
 
         if ($runner -eq "pipx") {
-            $python = Get-PythonCommand
-            if (-not $python) {
-                $rows += New-McpUpdateResult -Tool $tool -Provider $provider -Check "PyPI package" -Status "Skipped" -Detail "Python is not available yet; verify upstream before install."
-                continue
-            }
-
             try {
-                $pipRaw = & $python -m pip index versions ([string]$item.package) 2>$null
-                if ($LASTEXITCODE -ne 0) { throw "pip index failed" }
-                $firstLine = @($pipRaw | Where-Object { $_ -match "\(([^)]+)\)" } | Select-Object -First 1)
-                $latest = $null
-                if ($firstLine -and $firstLine[0] -match "\(([^)]+)\)") { $latest = $matches[1] }
-                if ([string]::IsNullOrWhiteSpace($latest)) { throw "pip did not return a version" }
-                $rows += New-McpUpdateResult -Tool $tool -Provider $provider -Check "PyPI package" -Status "OK" -Detail "pip $($item.package) latest $latest; configured $($item.package)."
+                $packageName = ([string]$item.package -replace "==.*$", "")
+                $pypiResponse = Invoke-RestMethod -Method Get -Uri "https://pypi.org/pypi/$packageName/json" -TimeoutSec 15
+                $latest = [string]$pypiResponse.info.version
+                if ([string]::IsNullOrWhiteSpace($latest)) { throw "PyPI did not return a version" }
+                $resolvedPackage = New-VersionedPackageSpec -Runner "pipx" -PackageName $packageName -Version $latest
+                $key = Get-VersionLockKey -ToolName $tool -Provider $provider
+                $lock["entries"][$key] = @{
+                    tool = $tool
+                    provider = $provider
+                    runner = "pipx"
+                    packageName = $packageName
+                    version = $latest
+                    resolvedPackage = $resolvedPackage
+                    checkedAt = (Get-Date).ToString("o")
+                }
+                $rows += New-McpUpdateResult -Tool $tool -Provider $provider -Check "PyPI package" -Status "Locked" -Detail "PyPI latest $latest; exact launch package $resolvedPackage."
             } catch {
                 $rows += New-McpUpdateResult -Tool $tool -Provider $provider -Check "PyPI package" -Status "Check" -Detail "Could not check pip package $($item.package). Verify the package source before installing."
             }
@@ -1454,6 +1865,8 @@ function Invoke-CheckMcpUpdates {
     }
 
     Write-Host (($rows | Format-Table -AutoSize | Out-String -Width 240).TrimEnd())
+    Write-VersionLock -Lock $lock
+    Write-Host "Wrote exact MCP package lock: $VersionLockPath"
     Write-McpUpdateReport -Rows $rows
 }
 
@@ -1824,7 +2237,7 @@ function Get-EnabledMcpServers {
             ServerName = [string]$item.serverName
             Transport = $transport
             Runner = $runner
-            Package = [string]$item.package
+            Package = [string](Resolve-LockedPackageSpec -ToolName $tool.Name -Item $item)
             Url = $url
             StartArgs = $startArgs
             RequiredScopes = $requiredScopes
@@ -1986,24 +2399,75 @@ function New-CodexToml {
     return ($lines -join [Environment]::NewLine)
 }
 
+function Test-McpServerConfiguredForClient {
+    param([string]$ClientName, [string]$Path, [string]$ServerName)
+    if (-not (Test-Path -LiteralPath $Path)) { return $false }
+
+    if ($ClientName -eq "Codex") {
+        $content = Get-Content -Raw -LiteralPath $Path
+        $match = [regex]::Match($content, "(?s)# BEGIN WEB_ANALYST_MCP_MANAGED(.*?)# END WEB_ANALYST_MCP_MANAGED")
+        if (-not $match.Success) { return $false }
+        return $match.Groups[1].Value -match "(?m)^\[mcp_servers\.$([regex]::Escape($ServerName))\]\s*$"
+    }
+
+    try {
+        $json = ConvertTo-Hashtable (Read-JsonFile -Path $Path)
+        return $json.ContainsKey("mcpServers") -and $json["mcpServers"].ContainsKey($ServerName)
+    } catch {
+        return $false
+    }
+}
+
+function Get-McpConfiguredSummary {
+    param($Selection, [string]$ServerName)
+    $clients = @(Resolve-TargetClients -Selection $Selection -RequestedClient "Selected")
+    $parts = @()
+    $allConfigured = $true
+    foreach ($clientName in $clients) {
+        $path = Get-ClientConfigTarget -ClientName $clientName -Selection $Selection
+        $configured = Test-McpServerConfiguredForClient -ClientName $clientName -Path $path -ServerName $ServerName
+        if (-not $configured) { $allConfigured = $false }
+        $parts += "$clientName`: " + $(if ($configured) { "configured" } else { "not configured" })
+    }
+    return [PSCustomObject]@{
+        AllConfigured = $allConfigured
+        Summary = $parts -join "; "
+    }
+}
+
 function Update-ManagedTextBlock {
-    param([string]$Path, [string]$Block, [string[]]$ServerNames = @())
+    param([string]$Path, [string]$Block)
     $pattern = "(?s)\r?\n?# BEGIN WEB_ANALYST_MCP_MANAGED.*?# END WEB_ANALYST_MCP_MANAGED\r?\n?"
     $content = ""
     if (Test-Path -LiteralPath $Path) {
         $content = [regex]::Replace((Get-Content -Raw -LiteralPath $Path), $pattern, [Environment]::NewLine)
     }
-    foreach ($serverName in $ServerNames) {
-        $escapedName = [regex]::Escape($serverName)
-        $serverPattern = "(?ms)^\[mcp_servers\.$escapedName\]\r?\n.*?(?=^\[|\z)"
-        $content = [regex]::Replace($content, $serverPattern, "")
-    }
     $newContent = $content.TrimEnd() + [Environment]::NewLine + [Environment]::NewLine + $Block + [Environment]::NewLine
     Set-Content -LiteralPath $Path -Value $newContent -Encoding UTF8
 }
 
-function Merge-McpJsonFile {
-    param([string]$Path, $NewObject)
+function Assert-NoCodexServerNameCollision {
+    param([string]$Path, [string[]]$ServerNames)
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+
+    $pattern = "(?s)\r?\n?# BEGIN WEB_ANALYST_MCP_MANAGED.*?# END WEB_ANALYST_MCP_MANAGED\r?\n?"
+    $unmanagedContent = [regex]::Replace((Get-Content -Raw -LiteralPath $Path), $pattern, [Environment]::NewLine)
+    foreach ($serverName in $ServerNames) {
+        $escapedName = [regex]::Escape($serverName)
+        if ($unmanagedContent -match "(?m)^\[mcp_servers\.$escapedName\]\s*$") {
+            throw "Codex config already contains an unmanaged MCP server named '$serverName' at $Path. Rename it or remove it explicitly before Apply; the kit will not overwrite it."
+        }
+    }
+}
+
+function Set-ManagedMcpJsonFile {
+    param(
+        [string]$Path,
+        $NewObject,
+        [hashtable]$PriorFingerprints = @{},
+        [switch]$PreviewOnly
+    )
+
     if (Test-Path -LiteralPath $Path) {
         $existing = ConvertTo-Hashtable (Get-Content -Raw -LiteralPath $Path | ConvertFrom-Json)
     } else {
@@ -2012,10 +2476,64 @@ function Merge-McpJsonFile {
     if (-not $existing.ContainsKey("mcpServers") -or $null -eq $existing["mcpServers"]) {
         $existing["mcpServers"] = @{}
     }
-    foreach ($name in $NewObject.mcpServers.Keys) {
-        $existing["mcpServers"][$name] = $NewObject.mcpServers[$name]
+
+    $newNames = @($NewObject.mcpServers.Keys)
+    foreach ($ownedName in @($PriorFingerprints.Keys)) {
+        if ($newNames -contains $ownedName -or -not $existing["mcpServers"].ContainsKey($ownedName)) { continue }
+        $currentFingerprint = Get-ObjectFingerprint -InputObject $existing["mcpServers"][$ownedName]
+        if ($currentFingerprint -eq [string]$PriorFingerprints[$ownedName]) {
+            $existing["mcpServers"].Remove($ownedName)
+        } else {
+            Write-Warning "Preserving '$ownedName' in $Path because it changed after the kit last managed it."
+        }
     }
-    Write-JsonFile -Object $existing -Path $Path
+
+    $newFingerprints = @{}
+    foreach ($name in $NewObject.mcpServers.Keys) {
+        $newEntry = $NewObject.mcpServers[$name]
+        $newFingerprint = Get-ObjectFingerprint -InputObject $newEntry
+        if ($existing["mcpServers"].ContainsKey($name)) {
+            $currentFingerprint = Get-ObjectFingerprint -InputObject $existing["mcpServers"][$name]
+            $ownedAndUnchanged = $PriorFingerprints.ContainsKey($name) -and $currentFingerprint -eq [string]$PriorFingerprints[$name]
+            if ($currentFingerprint -ne $newFingerprint -and -not $ownedAndUnchanged) {
+                throw "MCP config $Path already contains an unowned or user-modified server named '$name'. The kit will not overwrite it."
+            }
+        }
+        $existing["mcpServers"][$name] = $newEntry
+        $newFingerprints[$name] = $newFingerprint
+    }
+
+    if (-not $PreviewOnly) {
+        $directory = Split-Path -Parent $Path
+        if ($directory) { New-Item -ItemType Directory -Force $directory | Out-Null }
+        Write-JsonFile -Object $existing -Path $Path
+    }
+    return $newFingerprints
+}
+
+function Remove-OwnedMcpJsonEntries {
+    param([string]$Path, [hashtable]$Fingerprints)
+    if (-not (Test-Path -LiteralPath $Path)) { return 0 }
+
+    $existing = ConvertTo-Hashtable (Get-Content -Raw -LiteralPath $Path | ConvertFrom-Json)
+    if (-not $existing.ContainsKey("mcpServers") -or $null -eq $existing["mcpServers"]) { return 0 }
+
+    $removed = 0
+    foreach ($name in @($Fingerprints.Keys)) {
+        if (-not $existing["mcpServers"].ContainsKey($name)) { continue }
+        $currentFingerprint = Get-ObjectFingerprint -InputObject $existing["mcpServers"][$name]
+        if ($currentFingerprint -ne [string]$Fingerprints[$name]) {
+            Write-Warning "Preserving '$name' in $Path because it changed after the kit last managed it."
+            continue
+        }
+        $existing["mcpServers"].Remove($name)
+        $removed++
+    }
+
+    if ($removed -gt 0) {
+        Write-JsonFile -Object $existing -Path $Path
+    }
+    return $removed
 }
 
 function Invoke-Generate {
@@ -2029,42 +2547,72 @@ function Invoke-Generate {
 }
 
 function Invoke-Apply {
-    Invoke-Generate
     $servers = @(Get-EnabledMcpServers)
+    if ($servers.Count -eq 0) { throw "No enabled MCP servers are ready to apply." }
+
     $jsonObject = New-McpJsonObject -Servers $servers
     $codexToml = New-CodexToml -Servers $servers
     $selection = Get-Content -Raw -LiteralPath $SelectionPath | ConvertFrom-Json
-    $scope = [string]$selection.installScope
-    if (-not $scope) { $scope = "user" }
+    $targetClients = @(Resolve-TargetClients -Selection $selection)
+    $ownership = Read-OwnershipState
+    $plans = @()
 
-    if ($Client -eq "All" -or $Client -eq "Codex") {
-        if ($scope -eq "project") {
-            $codexDir = Join-Path $Root ".codex"
-        } else {
-            $codexDir = Join-Path $env:USERPROFILE ".codex"
+    foreach ($clientName in $targetClients) {
+        $path = Get-ClientConfigTarget -ClientName $clientName -Selection $selection
+        $prior = @{}
+        if ($ownership["clients"].ContainsKey($clientName) -and $ownership["clients"][$clientName].ContainsKey("fingerprints")) {
+            $prior = ConvertTo-Hashtable $ownership["clients"][$clientName]["fingerprints"]
         }
-        New-Item -ItemType Directory -Force $codexDir | Out-Null
-        $codexConfig = Join-Path $codexDir "config.toml"
-        Update-ManagedTextBlock -Path $codexConfig -Block $codexToml -ServerNames @($servers | ForEach-Object { $_.ServerName })
-        Write-Host "Updated Codex config: $codexConfig"
+
+        if ($clientName -eq "Codex") {
+            Assert-NoCodexServerNameCollision -Path $path -ServerNames @($servers | ForEach-Object { $_.ServerName })
+        } else {
+            Set-ManagedMcpJsonFile -Path $path -NewObject $jsonObject -PriorFingerprints $prior -PreviewOnly | Out-Null
+        }
+
+        $plans += [PSCustomObject]@{
+            Client = $clientName
+            Path = $path
+            Existing = if (Test-Path -LiteralPath $path) { "Yes" } else { "No" }
+            Servers = (@($servers | ForEach-Object { $_.ServerName }) -join ", ")
+        }
     }
 
-    if ($Client -eq "All" -or $Client -eq "Claude") {
-        $claudeMcp = Join-Path $Root ".mcp.json"
-        Merge-McpJsonFile -Path $claudeMcp -NewObject $jsonObject
-        Write-Host "Updated Claude project MCP config: $claudeMcp"
+    Write-Step "MCP configuration plan"
+    Write-Host (($plans | Format-Table -AutoSize | Out-String -Width 260).TrimEnd())
+    if ($Preview) {
+        Write-Host "Preview only. No MCP client configuration was changed."
+        return
     }
 
-    if ($Client -eq "All" -or $Client -eq "Gemini") {
-        if ($scope -eq "project") {
-            $geminiDir = Join-Path $Root ".gemini"
-        } else {
-            $geminiDir = Join-Path $env:USERPROFILE ".gemini"
+    Invoke-Generate
+    foreach ($plan in $plans) {
+        $directory = Split-Path -Parent $plan.Path
+        if ($directory) { New-Item -ItemType Directory -Force $directory | Out-Null }
+        $backup = New-ConfigBackup -Path $plan.Path
+        $prior = @{}
+        if ($ownership["clients"].ContainsKey($plan.Client) -and $ownership["clients"][$plan.Client].ContainsKey("fingerprints")) {
+            $prior = ConvertTo-Hashtable $ownership["clients"][$plan.Client]["fingerprints"]
         }
-        New-Item -ItemType Directory -Force $geminiDir | Out-Null
-        $geminiSettings = Join-Path $geminiDir "settings.json"
-        Merge-McpJsonFile -Path $geminiSettings -NewObject $jsonObject
-        Write-Host "Updated Gemini settings: $geminiSettings"
+
+        $fingerprints = @{}
+        if ($plan.Client -eq "Codex") {
+            Update-ManagedTextBlock -Path $plan.Path -Block $codexToml
+        } else {
+            $fingerprints = Set-ManagedMcpJsonFile -Path $plan.Path -NewObject $jsonObject -PriorFingerprints $prior
+        }
+
+        $ownership["clients"][$plan.Client] = @{
+            path = $plan.Path
+            format = if ($plan.Client -eq "Codex") { "toml-managed-block" } else { "json-owned-entries" }
+            serverNames = @($servers | ForEach-Object { $_.ServerName })
+            fingerprints = $fingerprints
+            lastBackup = $backup
+            appliedAt = (Get-Date).ToString("o")
+        }
+        Write-OwnershipState -State $ownership
+        Write-Host "Updated $($plan.Client) config: $($plan.Path)"
+        if ($backup) { Write-Host "Backup: $backup" }
     }
 }
 
@@ -2076,6 +2624,7 @@ function Invoke-Status {
 
     Write-Step "Selected tool status"
     $statusRows = @()
+    $factRows = @(Get-ToolStatusRows | Where-Object { $_.Enabled })
     foreach ($tool in $selection.tools.PSObject.Properties) {
         if (-not $tool.Value.enabled) { continue }
         $item = Resolve-CatalogItem -CatalogItem $catalog.($tool.Name) -Provider ([string]$tool.Value.provider)
@@ -2137,12 +2686,17 @@ function Invoke-Status {
             }
         }
 
+        $factRow = @($factRows | Where-Object { $_.Tool -eq $tool.Name } | Select-Object -First 1)
+        if ($factRow.Count -gt 0 -and [string]$factRow[0].Authenticated -like "Passed*") {
+            $status = [string]$factRow[0].Authenticated
+        }
+
         $statusRows += [PSCustomObject]@{
             Tool = [string]$item.displayName
-            Configured = "Selected"
+            Configured = if ($factRow.Count -gt 0) { [string]$factRow[0].Configured } else { "Unknown" }
             Authentication = $status
-            Visible = "See AI client status below"
-            Verified = "Pending read-only smoke test"
+            Visible = if ($factRow.Count -gt 0) { [string]$factRow[0].Visible } else { "Unknown" }
+            Verified = if ($factRow.Count -gt 0) { [string]$factRow[0].Verified } else { "Unknown" }
         }
     }
     if ($statusRows.Count -gt 0) {
@@ -2152,20 +2706,27 @@ function Invoke-Status {
     }
 
     Write-Step "AI client status"
-    if (Get-Command codex -ErrorAction SilentlyContinue) {
-        codex mcp list
-    } else {
-        Write-Host "Codex CLI: not found on PATH"
+    $targetClients = @(Resolve-TargetClients -Selection $selection -RequestedClient "Selected")
+    if ($targetClients -contains "Codex") {
+        if (Get-Command codex -ErrorAction SilentlyContinue) {
+            codex mcp list
+        } else {
+            Write-Host "Codex CLI: not found on PATH"
+        }
     }
-    if (Get-Command claude -ErrorAction SilentlyContinue) {
-        claude mcp list
-    } else {
-        Write-Host "Claude Code: not found on PATH"
+    if ($targetClients -contains "Claude") {
+        if (Get-Command claude -ErrorAction SilentlyContinue) {
+            claude mcp list
+        } else {
+            Write-Host "Claude Code: not found on PATH"
+        }
     }
-    if (Get-Command gemini -ErrorAction SilentlyContinue) {
-        Write-Host "Gemini CLI: found at $((Get-Command gemini).Source)"
-    } else {
-        Write-Host "Gemini CLI: not found on PATH"
+    if ($targetClients -contains "Gemini") {
+        if (Get-Command gemini -ErrorAction SilentlyContinue) {
+            Write-Host "Gemini CLI: found at $((Get-Command gemini).Source)"
+        } else {
+            Write-Host "Gemini CLI: not found on PATH"
+        }
     }
 }
 
@@ -2286,6 +2847,7 @@ function Invoke-Dashboard {
 
         if ($item.kind -eq "mcp") {
             $canShowAuthCommand = $true
+            $lockedPackage = $null
             if ($transport -eq "http") {
                 $url = [string]$item.url
                 if (-not $url -and $item.urlEnvKey) {
@@ -2300,9 +2862,19 @@ function Invoke-Dashboard {
                     $commandLines += "$($item.displayName): $loginCommand"
                 }
             } elseif ($item.package) {
+                $lockedPackage = Resolve-LockedPackageSpec -ToolName $tool.Name -Item $item -AllowUnlocked
+                if (-not $lockedPackage) {
+                    $canShowAuthCommand = $false
+                    $status = "Needs package lock"
+                    $note = "Run CheckMcpUpdates to resolve an exact package version before launch."
+                    $textRows[$textRows.Count - 1].Status = $status
+                    $textRows[$textRows.Count - 1]."Next step" = $note
+                }
+            }
+            if ($transport -ne "http" -and $lockedPackage) {
                 $runnerName = [string]$item.runner
                 if (-not $runnerName) { $runnerName = "npx" }
-                $base = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$ScriptPath`" -Action RunMcp -ServerName $($item.serverName) -Runner $runnerName -Package $($item.package)"
+                $base = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$ScriptPath`" -Action RunMcp -ServerName $($item.serverName) -Runner $runnerName -Package $lockedPackage"
                 $startArgs = @(Get-EffectiveStartArgs -Item $item -ToolName $tool.Name)
                 if ($startArgs.Count -gt 0) {
                     $encodedArgs = ConvertTo-McpArgsBase64 @($startArgs)
@@ -2313,6 +2885,9 @@ function Invoke-Dashboard {
             if ($item.authCommand -and $canShowAuthCommand) {
                 $authCommand = [string]$item.authCommand
                 $authCommand = $authCommand -replace "scripts\\WebAnalystSetup\.ps1", "`"$ScriptPath`""
+                if ($lockedPackage -and $item.package) {
+                    $authCommand = $authCommand.Replace([string]$item.package, [string]$lockedPackage)
+                }
                 $commandLines += "$($item.displayName) auth: $authCommand"
             }
         }
@@ -2335,51 +2910,96 @@ function Invoke-Dashboard {
     }
 }
 
-function Invoke-ResetCodexMcp {
-    if (-not $ConfirmedMcpEndpointDeletion) {
-        throw "ResetCodexMcp removes MCP endpoint configuration. During MCP setup, get explicit approval first, then rerun with -ConfirmedMcpEndpointDeletion."
-    }
+function Remove-CodexManagedBlock {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return $false }
 
-    $codexDir = Join-Path $env:USERPROFILE ".codex"
-    $codexConfig = Join-Path $codexDir "config.toml"
-    if (-not (Test-Path -LiteralPath $codexConfig)) {
-        Write-Host "No Codex config found at $codexConfig"
-        return
-    }
-
-    $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
-    $backup = Join-Path $codexDir "config.toml.web-analyst-backup-$stamp"
-    Copy-Item -LiteralPath $codexConfig -Destination $backup
-
-    $content = Get-Content -Raw -LiteralPath $codexConfig
+    $content = Get-Content -Raw -LiteralPath $Path
     $managedPattern = "(?s)\r?\n?# BEGIN WEB_ANALYST_MCP_MANAGED.*?# END WEB_ANALYST_MCP_MANAGED\r?\n?"
-    $content = [regex]::Replace($content, $managedPattern, [Environment]::NewLine)
+    if ($content -notmatch $managedPattern) { return $false }
 
-    foreach ($serverName in Get-CatalogServerNames) {
-        $escapedName = [regex]::Escape($serverName)
-        $serverPattern = "(?ms)^\[mcp_servers\.$escapedName\]\r?\n.*?(?=^\[|\z)"
-        $content = [regex]::Replace($content, $serverPattern, "")
-    }
-
-    $content = $content.TrimEnd()
+    $content = [regex]::Replace($content, $managedPattern, [Environment]::NewLine).TrimEnd()
     if ($content) {
-        Set-Content -LiteralPath $codexConfig -Value ($content + [Environment]::NewLine) -Encoding UTF8
+        Set-Content -LiteralPath $Path -Value ($content + [Environment]::NewLine) -Encoding UTF8
     } else {
-        Set-Content -LiteralPath $codexConfig -Value "" -Encoding UTF8
+        Set-Content -LiteralPath $Path -Value "" -Encoding UTF8
+    }
+    return $true
+}
+
+function Invoke-ResetMcpConfig {
+    param([string[]]$TargetClients)
+    if (-not $ConfirmedMcpEndpointDeletion) {
+        throw "ResetMcpConfig removes kit-owned MCP configuration. Get explicit approval first, then rerun with -ConfirmedMcpEndpointDeletion."
     }
 
-    Write-Host "Backed up Codex config: $backup"
-    Write-Host "Removed Web Analyst MCP server configuration from: $codexConfig"
+    Ensure-LocalFiles | Out-Null
+    $selection = Read-JsonFile -Path $SelectionPath
+    if (-not $TargetClients -or $TargetClients.Count -eq 0) {
+        $TargetClients = @(Resolve-TargetClients -Selection $selection)
+    }
+    $ownership = Read-OwnershipState
+    $ownershipPath = Get-OwnershipStatePath
+
+    foreach ($clientName in $TargetClients) {
+        $ownedClient = $null
+        if ($ownership["clients"].ContainsKey($clientName)) {
+            $ownedClient = $ownership["clients"][$clientName]
+        }
+        $path = if ($ownedClient -and $ownedClient.ContainsKey("path")) { [string]$ownedClient["path"] } else { Get-ClientConfigTarget -ClientName $clientName -Selection $selection }
+
+        if (-not (Test-Path -LiteralPath $path)) {
+            Write-Host "No $clientName config found at $path"
+            if ($ownedClient) { $ownership["clients"].Remove($clientName) }
+            continue
+        }
+
+        if ($clientName -eq "Codex") {
+            $content = Get-Content -Raw -LiteralPath $path
+            if ($content -match "# BEGIN WEB_ANALYST_MCP_MANAGED") {
+                $backup = New-ConfigBackup -Path $path
+                if (Remove-CodexManagedBlock -Path $path) {
+                    Write-Host "Removed the kit-owned Codex MCP block from: $path"
+                    Write-Host "Backup: $backup"
+                }
+            } else {
+                Write-Host "No kit-owned Codex MCP block found at $path. Nothing was removed."
+            }
+        } elseif ($ownedClient -and $ownedClient.ContainsKey("fingerprints")) {
+            $fingerprints = ConvertTo-Hashtable $ownedClient["fingerprints"]
+            if ($fingerprints.Count -gt 0) {
+                $backup = New-ConfigBackup -Path $path
+                $removed = Remove-OwnedMcpJsonEntries -Path $path -Fingerprints $fingerprints
+                Write-Host "Removed $removed kit-owned MCP entr$(if ($removed -eq 1) { 'y' } else { 'ies' }) from $clientName config: $path"
+                if ($backup) { Write-Host "Backup: $backup" }
+            }
+        } else {
+            Write-Warning "No ownership record exists for $clientName JSON config at $path. Nothing was removed."
+        }
+
+        if ($ownedClient) { $ownership["clients"].Remove($clientName) }
+    }
+
+    if ($ownership["clients"].Count -gt 0) {
+        Write-OwnershipState -State $ownership
+    } elseif (Test-Path -LiteralPath $ownershipPath) {
+        Remove-Item -LiteralPath $ownershipPath -Force
+    }
+}
+
+function Invoke-ResetCodexMcp {
+    Invoke-ResetMcpConfig -TargetClients @("Codex")
 }
 
 function Invoke-ResetKit {
     Write-Step "Resetting local kit state"
+    $ownershipStatePath = Get-OwnershipStatePath
     $envMap = @{}
     if (Test-Path -LiteralPath $EnvPath) {
         $envMap = Import-DotEnvMap -Path $EnvPath
     }
 
-    foreach ($target in @($SelectionPath, $EnvPath, (Join-Path $Root ".mcp.json"), (Join-Path $Root ".codex\config.toml"), (Join-Path $Root ".gemini\settings.json"))) {
+    foreach ($target in @($SelectionPath, $EnvPath)) {
         Assert-PathInsideRoot -Path $target
         if (Test-Path -LiteralPath $target) {
             Remove-Item -LiteralPath $target -Force
@@ -2411,6 +3031,9 @@ function Invoke-ResetKit {
         Remove-ExternalKitToken -Path $externalPath
     }
     Write-Host "External cleanup is limited to known files under %USERPROFILE%\.web-analyst-agent."
+    if (Test-Path -LiteralPath $ownershipStatePath) {
+        Write-Warning "MCP client configuration ownership is still recorded. Run ResetMcpConfig with explicit approval before ResetKit when you also want to disconnect the configured clients."
+    }
 
     [Environment]::SetEnvironmentVariable("BIGQUERY_MCP_ACCESS_TOKEN", $null, "User")
     [Environment]::SetEnvironmentVariable("BIGQUERY_MCP_ACCESS_TOKEN", $null, "Process")
@@ -2427,6 +3050,11 @@ function Invoke-ResetKit {
     $gitkeep = Join-Path $GeneratedDir ".gitkeep"
     if (-not (Test-Path -LiteralPath $gitkeep)) {
         New-Item -ItemType File -Path $gitkeep -Force | Out-Null
+    }
+
+    if (-not (Test-Path -LiteralPath $ownershipStatePath) -and (Test-Path -LiteralPath $InstallationIdPath)) {
+        Remove-Item -LiteralPath $InstallationIdPath -Force
+        Write-Host "Removed local installation identifier."
     }
 
     Write-Host "Kit reset complete. Templates, catalog, script, and docs were kept."
@@ -2598,6 +3226,7 @@ function Invoke-RunMcp {
     exit $LASTEXITCODE
 }
 
+function Invoke-WebAnalystSetupMain {
 switch ($Action) {
     "Prepare" {
         Ensure-LocalFiles
@@ -2626,6 +3255,9 @@ switch ($Action) {
     }
     "OnboardingReport" {
         Invoke-OnboardingReport
+    }
+    "RecordEvidence" {
+        Invoke-RecordEvidence
     }
     "ReleaseAudit" {
         Invoke-ReleaseAudit
@@ -2678,6 +3310,9 @@ switch ($Action) {
     "ResetKit" {
         Invoke-ResetKit
     }
+    "ResetMcpConfig" {
+        Invoke-ResetMcpConfig
+    }
     "ResetCodexMcp" {
         Invoke-ResetCodexMcp
     }
@@ -2686,8 +3321,15 @@ switch ($Action) {
     }
     "All" {
         Ensure-LocalFiles
+        Invoke-Doctor
         Invoke-Prereqs
+        Invoke-CheckMcpUpdates
         Invoke-Apply
         Invoke-Dashboard
     }
+}
+}
+
+if ($MyInvocation.InvocationName -ne ".") {
+    Invoke-WebAnalystSetupMain
 }

@@ -70,9 +70,9 @@ function Invoke-FirstDayChecklist {
             Runtime = [string]$row.Runtime
             Auth = [string]$row.Auth
             CredentialState = [string]$row.CredentialState
-            Configured = if ($row.Enabled) { "Selected" } else { "Not selected" }
-            Visible = "Check after Apply/reload"
-            Verified = "Pending read-only proof"
+            Configured = [string]$row.Configured
+            Visible = [string]$row.Visible
+            Verified = [string]$row.Verified
             Risk = [string]$item.riskLevel
             WriteCapability = [string]$item.writeCapability
             NextStep = [string]$row.NextStep

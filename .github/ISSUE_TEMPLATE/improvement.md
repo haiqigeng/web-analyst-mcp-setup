@@ -15,8 +15,12 @@ assignees: ""
 ## Suggested change
 
 
+## Provider or client source
+
+Include the primary upstream documentation when this changes an MCP provider or client contract.
+
+
 ## Safety or credential impact
 
 
 ## Extra context
-

@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Web Analyst Onboarding Evidence State",
+  "type": "object",
+  "required": ["version", "toolEvidence"],
+  "properties": {
+    "version": { "const": 2 },
+    "updatedAt": { "type": "string" },
+    "generatedAt": { "type": "string" },
+    "profile": { "type": "string" },
+    "sourceSelectionFile": { "type": "string" },
+    "selectedTools": { "type": "array" },
+    "credentialKeys": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "reminders": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "toolEvidence": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["provider", "stages"],
+        "properties": {
+          "provider": { "type": "string" },
+          "stages": {
+            "type": "object",
+            "propertyNames": {
+              "enum": ["Configured", "Authenticated", "Visible", "Verified"]
+            },
+            "additionalProperties": { "$ref": "#/$defs/stage" }
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "stage": {
+      "type": "object",
+      "required": ["outcome", "recordedAt", "target", "evidence"],
+      "properties": {
+        "outcome": { "enum": ["Passed", "Failed", "Pending"] },
+        "recordedAt": { "type": "string" },
+        "target": { "type": ["string", "null"] },
+        "evidence": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    }
+  }
+}

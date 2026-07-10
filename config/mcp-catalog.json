@@ -221,6 +221,7 @@
     "authMode": "user_oauth_remote",
     "package": "mcp-remote@latest",
     "serverName": "gtm",
+    "defaultProvider": "stape-gtm-remote-oauth",
     "startArgs": [
       "https://gtm-mcp.stape.ai/mcp"
     ],
@@ -308,6 +309,7 @@
     "authMode": "none",
     "package": "@playwright/mcp@latest",
     "serverName": "playwright",
+    "defaultProvider": "playwright-official-mcp",
     "startArgs": [],
     "credentialKeys": [],
     "authCommand": null,
@@ -340,6 +342,7 @@
     "authMode": "none",
     "package": "chrome-devtools-mcp@latest",
     "serverName": "chrome-devtools",
+    "defaultProvider": "chrome-devtools-official-mcp",
     "startArgs": [
       "--no-usage-statistics"
     ],
@@ -375,6 +378,7 @@
     "authMode": "company_oauth_remote",
     "url": "https://bigquery.googleapis.com/mcp",
     "serverName": "bigquery",
+    "defaultProvider": "google-bigquery-official-remote-mcp",
     "bearerTokenEnvVar": "BIGQUERY_MCP_ACCESS_TOKEN",
     "requiredGoogleServices": [
       "bigquery.googleapis.com"
@@ -423,6 +427,7 @@
     "authMode": "user_oauth_remote",
     "url": "https://mcp.clickup.com/mcp",
     "serverName": "clickup",
+    "defaultProvider": "clickup-official-remote-oauth",
     "credentialKeys": [],
     "authCommand": "codex mcp login clickup",
     "notes": "Recommended official remote MCP. Use browser OAuth from the MCP client when prompted.",
@@ -454,6 +459,7 @@
     "authMode": "api_token",
     "package": "@delorenj/mcp-server-trello@latest",
     "serverName": "trello",
+    "defaultProvider": "delorenj-trello",
     "startArgs": [],
     "credentialKeys": [
       "TRELLO_API_KEY",
@@ -490,6 +496,7 @@
     "authMode": "api_header",
     "package": "mcp-remote@latest",
     "serverName": "piano",
+    "defaultProvider": "piano-official-private-beta",
     "startArgs": [
       "https://analytics-api-eu.piano.io/mcp/",
       "--header",
@@ -528,6 +535,7 @@
     "authMode": "api_token",
     "package": null,
     "serverName": "piano-api",
+    "defaultProvider": "api-connector",
     "startArgs": [],
     "credentialKeys": [
       "PIANO_ACCESS_KEY",
@@ -567,6 +575,7 @@
     "authMode": "api_token",
     "package": null,
     "serverName": "tag-commander",
+    "defaultProvider": "api-connector",
     "startArgs": [],
     "credentialKeys": [
       "TAG_COMMANDER_API_KEY",
@@ -604,6 +613,7 @@
     "authMode": "user_oauth_remote",
     "urlEnvKey": "CONTENTSQUARE_MCP_URL",
     "serverName": "contentsquare",
+    "defaultProvider": "contentsquare-official-mcp",
     "credentialKeys": [
       "CONTENTSQUARE_MCP_URL"
     ],

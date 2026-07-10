@@ -1,3 +1,21 @@
+function Get-ReleaseSecretPatterns {
+    return @(
+        ("GOC" + "SPX[-_A-Za-z0-9]+"),
+        ("github" + "_pat_[A-Za-z0-9_]+"),
+        ("gh" + "p_[A-Za-z0-9]+"),
+        ("gh" + "o_[A-Za-z0-9]+"),
+        "client_secret_\d+",
+        "C:\\Users\\[^\\]+",
+        "Downloads\\[^\\]+",
+        "refresh_token\s*[:=]\s*[""']?(1//|1/)[A-Za-z0-9_\-]+",
+        "access_token\s*[:=]\s*[""']?(ya29\.|glpat-|github_pat_|ghp_|gho_)[A-Za-z0-9_\-.]+",
+        "private_key\s*[:=]",
+        "GTM-[A-Z0-9]{6,}",
+        "G-[A-Z0-9]{6,}",
+        "UA-\d+-\d+"
+    )
+}
+
 function Invoke-ReleaseAudit {
     New-Item -ItemType Directory -Force $GeneratedDir | Out-Null
     $reportPath = Join-Path $GeneratedDir "release-audit.md"
@@ -60,6 +78,7 @@ function Invoke-ReleaseAudit {
         "generated/codex.config-snippet.toml",
         "generated/onboarding-report.md",
         "generated/onboarding-state.json",
+        "generated/mcp-version-lock.json",
         "generated/first-day-checklist.md",
         "generated/credential-guide.md",
         "generated/bigquery-safety-plan.md",
@@ -69,28 +88,17 @@ function Invoke-ReleaseAudit {
         "generated/release-audit.md",
         ".mcp.json",
         ".codex/config.toml",
-        ".gemini/settings.json"
+        ".gemini/settings.json",
+        ".web-analyst-installation-id"
     )
     $trackedViolations = @($forbiddenTracked | Where-Object { $trackedFiles -contains $_ })
+    $trackedViolations += @($trackedFiles | Where-Object { $_ -like "*.web-analyst-backup-*" })
+    $trackedViolations = @($trackedViolations | Select-Object -Unique)
     if ($trackedViolations.Count -gt 0) {
         $errors += "Forbidden local/runtime files are tracked: $($trackedViolations -join ', ')"
     }
 
-    $secretPatterns = @(
-        ("GOC" + "SPX[-_A-Za-z0-9]+"),
-        ("github" + "_pat_[A-Za-z0-9_]+"),
-        ("gh" + "p_[A-Za-z0-9]+"),
-        ("gh" + "o_[A-Za-z0-9]+"),
-        "client_secret_\d+",
-        "C:\\Users\\[^\\]+",
-        "Downloads\\[^\\]+",
-        "refresh_token\s*[:=]\s*[""']?(1//|1/)[A-Za-z0-9_\-]+",
-        "access_token\s*[:=]\s*[""']?(ya29\.|glpat-|github_pat_|ghp_|gho_)[A-Za-z0-9_\-.]+",
-        "private_key\s*[:=]",
-        "GTM-[A-Z0-9]{6,}",
-        "G-[A-Z0-9]{6,}",
-        "UA-\d+-\d+"
-    )
+    $secretPatterns = @(Get-ReleaseSecretPatterns)
 
     $scanHits = @()
     foreach ($file in $trackedFiles) {

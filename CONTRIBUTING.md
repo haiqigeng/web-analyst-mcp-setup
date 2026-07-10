@@ -15,15 +15,21 @@ with analytics tooling.
   or publishing action.
 - Keep Windows support strong; note any PowerShell 7 or cross-platform behavior
   clearly.
-- Update `README.md`, `AGENTS.md`, or docs when changing the user-facing setup
-  flow.
-- Add or update validation checks when changing scripts or generated config.
+- Keep provider-specific metadata in `config/mcp-catalog.json`; do not duplicate
+  it in `SKILL.md`, `AGENTS.md`, or `README.md`.
+- Update `SKILL.md` when changing agent behavior and `README.md` when changing
+  user-facing behavior. Keep `AGENTS.md` as a small compatibility entry point.
+- Add behavior tests for config ownership, evidence, reset boundaries, version
+  locks, or client output whenever those areas change.
 
 ## Pull Requests
 
 Before opening a pull request:
 
-- Run the available validation workflow or local test scripts when relevant.
+- Run `Validate`, `TestFixtures`, `PesterTests`, `CatalogReview`, and
+  `ReleaseAudit`.
 - Explain the setup scenario the change improves.
 - Call out any new dependency, permission, credential, or vendor-console
   requirement.
+- For provider changes, include the primary upstream source, officialness,
+  runtime, auth route, risk, and verification date.

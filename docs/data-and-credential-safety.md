@@ -19,6 +19,8 @@ Before connecting a company account to a remote MCP, confirm whether the provide
 - If a team prefers not to place raw values in `secrets/.env.local`, use the supported `KEY_FILE` pattern from `secrets/.env.template`. Keep the main key empty, point `KEY_FILE` to an ignored local file, and let the helper read the secret at runtime.
 - Never commit OAuth client secrets, access tokens, refresh tokens, API keys, service-account JSON files, or generated MCP config containing machine paths.
 - Treat token-file presence as incomplete. A connection is ready only after a harmless read-only smoke test passes.
+- Resolve floating package metadata into `generated/mcp-version-lock.json` before launching local MCPs. Reuse the exact locked version until the next deliberate update check.
+- Preview Apply targets, preserve unrelated configuration, and keep the generated backup until the connection has been verified.
 - During MCP setup, never delete, reset, revoke, publish, deploy, or otherwise change MCP endpoint/server/container/project-facing state without explicit approval. State the exact target ID/name and action before doing it.
 
 ## Scope Rules
@@ -45,13 +47,19 @@ For IT or data teams, explain the request in terms of:
 
 ## Revocation
 
-Most OAuth connections can be revoked from the vendor account security page. Local ignored files can be removed with:
+Most OAuth connections can be revoked from the vendor account security page. Remove kit-owned MCP client entries only after explicit approval:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action ResetMcpConfig -Client Selected -ConfirmedMcpEndpointDeletion
+```
+
+Then remove local ignored credentials and generated state with:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action ResetKit
 ```
 
-Do not run `ResetKit` immediately after real onboarding unless you intentionally want to disconnect the local setup.
+Do not run either reset immediately after real onboarding. `ResetKit` does not delete MCP client configuration; this prevents a share/compression cleanup from silently disconnecting a real workstation.
 
 ## Release Safety
 

@@ -6,6 +6,8 @@ generated/*
 .mcp.json
 .codex/config.toml
 .gemini/settings.json
+.web-analyst-installation-id
+*.web-analyst-backup-*
 node_modules/
 npm-debug.log*
 .playwright-mcp/

@@ -46,8 +46,11 @@ function Invoke-CatalogReview {
             $lastVerified = [DateTime]::MinValue
             if (-not [DateTime]::TryParseExact([string]$item.lastVerified, "yyyy-MM-dd", $null, [System.Globalization.DateTimeStyles]::None, [ref]$lastVerified)) {
                 $errors += "$($providerEntry.ToolName)/$($providerEntry.ProviderName) has invalid lastVerified value '$($item.lastVerified)'."
-            } elseif (($today - $lastVerified).TotalDays -gt 180) {
-                $warnings += "$($providerEntry.ToolName)/$($providerEntry.ProviderName) has not been verified in more than 180 days."
+            } else {
+                $reviewDays = Get-CatalogReviewWindowDays -LifecycleStatus ([string]$item.lifecycleStatus)
+                if (($today - $lastVerified).TotalDays -gt $reviewDays) {
+                    $warnings += "$($providerEntry.ToolName)/$($providerEntry.ProviderName) is outside its $reviewDays-day verification window."
+                }
             }
 
             if ($item.kind -eq "mcp" -and $item.transport -eq "stdio" -and $item.runner -eq "npx" -and $item.package -and ([string]$item.package -notmatch "@latest$")) {

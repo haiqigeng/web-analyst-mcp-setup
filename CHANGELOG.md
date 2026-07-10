@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.4.0 - Ownership, evidence, and reproducibility
+
+- Added an installable `SKILL.md` and Codex `agents/openai.yaml` metadata while keeping `AGENTS.md` as a lightweight cross-agent entry point.
+- Made MCP Apply ownership-aware: selected clients only, preview support, backups, collision refusal, and exact ownership records.
+- Added `ResetMcpConfig` to remove only unchanged kit-owned entries; `ResetKit` no longer deletes client configuration files.
+- Added factual onboarding evidence for configured, authenticated, visible, and verified stages, including target and human-verifiable proof in handover reports.
+- Added exact local npm/PyPI package locking after update checks, plus lifecycle-based catalog freshness windows and scheduled provider checks.
+- Expanded the suite from 6 to 26 behavior and safety tests, added Windows PowerShell 5.1 CI, and enforced JSON schemas in CI.
+- Made the provider catalog the documentation source of truth and removed duplicated provider instructions from agent-facing files.
+
 ## v1.3.0 - Setup guidance, safety, and maintainability
 
 - Added on-demand `CredentialGuide` output with direct setup URLs and selected-tool credential requirements.

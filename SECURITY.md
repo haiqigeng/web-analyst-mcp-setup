@@ -6,8 +6,9 @@ Security fixes are considered for the latest public release.
 
 ## Reporting A Vulnerability
 
-Please report security issues privately by email or LinkedIn rather than opening
-a public issue.
+Please use the repository's **Security** tab and choose **Report a
+vulnerability** so credentials, reproduction details, and affected paths stay
+private. Do not open a public issue containing secrets or client data.
 
 Include:
 
