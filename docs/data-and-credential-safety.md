@@ -16,6 +16,7 @@ Before connecting a company account to a remote MCP, confirm whether the provide
 - Do not reuse credentials from a previous employer, agency, or client.
 - Prefer browser OAuth when available because the user can see and revoke the connection.
 - Store local secrets only in ignored files such as `secrets/.env.local`.
+- Launch each local MCP with only the environment keys declared for that selected tool and provider; never pass the complete local credential map to every MCP process.
 - If a team prefers not to place raw values in `secrets/.env.local`, use the supported `KEY_FILE` pattern from `secrets/.env.template`. Keep the main key empty, point `KEY_FILE` to an ignored local file, and let the helper read the secret at runtime.
 - Never commit OAuth client secrets, access tokens, refresh tokens, API keys, service-account JSON files, or generated MCP config containing machine paths.
 - Treat token-file presence as incomplete. A connection is ready only after a harmless read-only smoke test passes.
@@ -33,6 +34,8 @@ Ask for the narrowest practical scope:
 - GA4: read-only reporting/admin discovery by default.
 - BigQuery: metadata or limited read-only queries first; confirm cost and dataset scope before broad SQL.
 - Browser tools: warn before using logged-in, internal, or sensitive pages.
+
+For a connection smoke test, ask for the intended resource name or ID first and return only the matching identity or a minimal aggregate. Do not enumerate every accessible account, property, container, project, dataset, workspace, or board merely to prove access.
 
 ## Company IT Talking Points
 

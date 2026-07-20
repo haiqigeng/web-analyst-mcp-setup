@@ -4,7 +4,7 @@
 [![Latest release](https://img.shields.io/github/v/release/haiqigeng/web-analyst-mcp-setup?sort=semver)](https://github.com/haiqigeng/web-analyst-mcp-setup/releases/latest)
 [![License](https://img.shields.io/github/license/haiqigeng/web-analyst-mcp-setup)](LICENSE)
 
-Version: 1.4.0
+Version: 1.5.0
 
 A Windows-first onboarding skill that helps Codex, Claude Code, Gemini CLI, and similar agents connect and verify the tools a web analyst needs on a new company PC.
 
@@ -58,6 +58,7 @@ The current tool and provider inventory, including officialness, runtime, authen
 - Existing client files are backed up before Apply or managed reset.
 - Unowned MCP names cause a collision error instead of being overwritten.
 - Reset removes only entries whose ownership can be proven; user-modified or unrelated entries are preserved.
+- Local MCP processes receive only the environment keys declared for their selected tool and provider.
 - Credentials, tokens, package locks, evidence, reports, backups, and machine-specific paths remain ignored by Git.
 - Third-party hosted MCPs must be disclosed before connecting company data.
 
@@ -81,7 +82,7 @@ Internal runtime files such as `generated/onboarding-state.json`, `generated/mcp
 - `scripts/WebAnalystSetup.ps1`: Windows setup and configuration engine.
 - `scripts/lib/`: focused reporting, audit, checklist, and test helpers.
 - `config/mcp-catalog.json`: provider source of truth.
-- `config/client-capabilities.json`: supported client configuration behavior.
+- `config/client-capabilities.json`: supported client targets and client-specific MCP configuration behavior.
 - `config/tool-selection.example.json`: clean template copied to ignored local selection.
 - `config/tool-profiles.json`: dormant/manual profile scaffolding, not used by default onboarding.
 - `secrets/.env.template`: clean template copied to ignored local credentials.

@@ -13,6 +13,7 @@ BeforeAll {
 Describe "Reusable kit hygiene" {
     It "does not track local runtime files" {
         $tracked = git -C $RepoRoot ls-files
+        if ($LASTEXITCODE -ne 0) { throw "git ls-files failed with exit code $LASTEXITCODE" }
         foreach ($path in @(
             "secrets/.env.local",
             "config/tool-selection.json",
@@ -84,6 +85,13 @@ Describe "Catalog provider metadata" {
         $fallback.runtime | Should -Be "remote"
         $fallback.selectedProvider | Should -Be "google-drive-official-remote"
     }
+
+    It "keeps broad analytics inventories out of smoke tests" {
+        [string]$Catalog.googleTagManager.testPrompt | Should -Match "intended GTM account or container"
+        [string]$Catalog.googleTagManager.testPrompt | Should -Match "Do not enumerate"
+        [string]$Catalog.bigQuery.testPrompt | Should -Match "confirmed project and dataset"
+        [string]$Catalog.bigQuery.testPrompt | Should -Match "Do not enumerate"
+    }
 }
 
 Describe "Deterministic configuration generation" {
@@ -116,25 +124,67 @@ Describe "Deterministic configuration generation" {
 
     It "generates Codex TOML with exact packages and remote auth metadata" {
         $toml = New-CodexToml -Servers $SampleServers
+        $legacyToml = New-CodexToml -Servers $SampleServers -WithoutToolIdentity
         $toml | Should -Match '\[mcp_servers\.browser-qa\]'
         $toml | Should -Match '@playwright/mcp@1\.2\.3'
+        $toml | Should -Match '"-ToolName", "browserQa"'
+        $legacyToml | Should -Match '@playwright/mcp@1\.2\.3'
+        $legacyToml | Should -Not -Match '"-ToolName", "browserQa"'
         $toml | Should -Match '\[mcp_servers\.bigquery\]'
         $toml | Should -Match 'bearer_token_env_var = "BIGQUERY_TOKEN"'
         $toml | Should -Match 'scopes = \["scope\.read"\]'
     }
 
-    It "generates JSON configuration for Claude and Gemini" {
-        $json = New-McpJsonObject -Servers $SampleServers
-        $json.mcpServers.Keys | Should -Contain "browser-qa"
-        $json.mcpServers.Keys | Should -Contain "bigquery"
-        $json.mcpServers["browser-qa"].command | Should -Be "powershell.exe"
-        $json.mcpServers["bigquery"].url | Should -Be "https://example.invalid/mcp"
+    It "generates client-specific JSON configuration for Claude and Gemini" {
+        $claudeJson = New-McpJsonObject -Servers $SampleServers -ClientName "Claude"
+        $geminiJson = New-McpJsonObject -Servers $SampleServers -ClientName "Gemini"
+
+        $claudeJson.mcpServers.Keys | Should -Contain "browser-qa"
+        $claudeJson.mcpServers["browser-qa"].command | Should -Be "powershell.exe"
+        $claudeJson.mcpServers["bigquery"].type | Should -Be "http"
+        $claudeJson.mcpServers["bigquery"].url | Should -Be "https://example.invalid/mcp"
+        $claudeJson.mcpServers["bigquery"].headers.Authorization | Should -Be 'Bearer ${BIGQUERY_TOKEN}'
+
+        $geminiJson.mcpServers["browser-qa"].command | Should -Be "powershell.exe"
+        $geminiJson.mcpServers["bigquery"].httpUrl | Should -Be "https://example.invalid/mcp"
+        $geminiJson.mcpServers["bigquery"].ContainsKey("url") | Should -BeFalse
+        $geminiJson.mcpServers["bigquery"].headers.Authorization | Should -Be 'Bearer ${BIGQUERY_TOKEN}'
     }
 
     It "creates stable fingerprints regardless of JSON property order" {
         $first = [ordered]@{ command = "node"; args = @("a", "b") }
         $second = [ordered]@{ args = @("a", "b"); command = "node" }
         (Get-ObjectFingerprint $first) | Should -Be (Get-ObjectFingerprint $second)
+    }
+}
+
+Describe "Selected-provider prerequisites" {
+    It "requires only runtimes used by the selected providers" {
+        $remoteOnly = @([PSCustomObject]@{ Item = [PSCustomObject]@{ runner = $null; authMode = "company_oauth_remote" } })
+        $nodeOnly = @([PSCustomObject]@{ Item = [PSCustomObject]@{ runner = "npx"; authMode = "company_oauth_browser" } })
+        $adcOnly = @([PSCustomObject]@{ Item = [PSCustomObject]@{ runner = "pipx"; authMode = "company_oauth_adc" } })
+
+        $remoteNeeds = Get-PrerequisiteNeeds -SelectedItems $remoteOnly -IncludePython $false
+        $remoteNeeds.NeedsNode | Should -BeFalse
+        $remoteNeeds.NeedsPython | Should -BeFalse
+        $remoteNeeds.NeedsGcloud | Should -BeFalse
+
+        $nodeNeeds = Get-PrerequisiteNeeds -SelectedItems $nodeOnly -IncludePython $false
+        $nodeNeeds.NeedsNode | Should -BeTrue
+        $nodeNeeds.NeedsPython | Should -BeFalse
+        $nodeNeeds.NeedsGcloud | Should -BeFalse
+
+        $adcNeeds = Get-PrerequisiteNeeds -SelectedItems $adcOnly -IncludePython $false
+        $adcNeeds.NeedsNode | Should -BeFalse
+        $adcNeeds.NeedsPython | Should -BeTrue
+        $adcNeeds.NeedsGcloud | Should -BeTrue
+    }
+
+    It "does not upgrade a healthy Node.js runtime during Prereqs" {
+        $prereqText = [regex]::Match($ScriptText, '(?s)function Invoke-Prereqs \{(.*?)function New-McpUpdateResult').Groups[1].Value
+        $prereqText | Should -Match '(?s)elseif \(\$nodeMajor -lt 22\).*?winget upgrade'
+        $prereqText | Should -Match 'else \{\s+Write-Host "node: \$raw"\s+\}'
+        $prereqText | Should -Not -Match 'Checking Git'
     }
 }
 
@@ -145,6 +195,12 @@ Describe "Ownership-safe configuration changes" {
             $second = Get-InstallationId -Path $installationIdPath
             $first | Should -Be $second
             { [Guid]::Parse($first) } | Should -Not -Throw
+    }
+
+    It "does not create an installation identifier during a read-only lookup" {
+            $installationIdPath = Join-Path $TestDrive "read-only-installation-id"
+            (Get-InstallationId -Path $installationIdPath -ReadOnly) | Should -BeNullOrEmpty
+            Test-Path -LiteralPath $installationIdPath | Should -BeFalse
     }
 
     It "creates a recovery backup before a config rewrite" {
@@ -167,13 +223,37 @@ Describe "Ownership-safe configuration changes" {
             '# END WEB_ANALYST_MCP_MANAGED'
         )
 
-        Update-ManagedTextBlock -Path $path -Block "# BEGIN WEB_ANALYST_MCP_MANAGED`n[mcp_servers.new-kit-entry]`nurl = `"https://new.invalid/mcp`"`n# END WEB_ANALYST_MCP_MANAGED"
+        $oldFingerprint = Get-ObjectFingerprint -InputObject (Get-CodexManagedBlock -Path $path)
+        $newBlock = "# BEGIN WEB_ANALYST_MCP_MANAGED`n[mcp_servers.new-kit-entry]`nurl = `"https://new.invalid/mcp`"`n# END WEB_ANALYST_MCP_MANAGED"
+        $newFingerprint = Update-ManagedTextBlock -Path $path -Block $newBlock -ExpectedFingerprint $oldFingerprint
         $content = Get-Content -Raw $path
 
+        $newFingerprint | Should -Be (Get-ObjectFingerprint -InputObject $newBlock)
         $content | Should -Match 'model = "example"'
         $content | Should -Match '\[mcp_servers\.unrelated\]'
         $content | Should -Match '\[mcp_servers\.new-kit-entry\]'
         $content | Should -Not -Match 'old-kit-entry'
+    }
+
+    It "validates a Codex managed-block update without writing in preview" {
+        $path = Join-Path $TestDrive "preview-config.toml"
+        $block = "# BEGIN WEB_ANALYST_MCP_MANAGED`n[mcp_servers.preview]`nurl = `"https://preview.invalid/mcp`"`n# END WEB_ANALYST_MCP_MANAGED"
+
+        Update-ManagedTextBlock -Path $path -Block $block -PreviewOnly | Out-Null
+
+        Test-Path -LiteralPath $path | Should -BeFalse
+    }
+
+    It "refuses to overwrite or remove a user-modified Codex managed block" {
+        $path = Join-Path $TestDrive "modified-config.toml"
+        $originalBlock = "# BEGIN WEB_ANALYST_MCP_MANAGED`n[mcp_servers.owned]`nurl = `"https://owned.invalid/mcp`"`n# END WEB_ANALYST_MCP_MANAGED"
+        Set-Content -LiteralPath $path -Value $originalBlock
+        $fingerprint = Get-ObjectFingerprint -InputObject (Get-CodexManagedBlock -Path $path)
+        Set-Content -LiteralPath $path -Value ($originalBlock -replace "owned.invalid", "user-change.invalid")
+
+        { Update-ManagedTextBlock -Path $path -Block $originalBlock -ExpectedFingerprint $fingerprint } | Should -Throw "*user-modified managed block*"
+        (Remove-CodexManagedBlock -Path $path -ExpectedFingerprint $fingerprint) | Should -BeFalse
+        (Get-Content -Raw -LiteralPath $path) | Should -Match "user-change.invalid"
     }
 
     It "refuses an unmanaged Codex server-name collision" {
@@ -227,6 +307,62 @@ Describe "Ownership-safe configuration changes" {
         $resetKitText | Should -Not -Match '\.mcp\.json'
         $resetKitText | Should -Not -Match '\.codex\\config\.toml'
         $resetKitText | Should -Not -Match '\.gemini\\settings\.json'
+    }
+}
+
+Describe "Per-tool MCP credential isolation" {
+    It "includes the tool identity in generated local launchers" {
+        $server = [PSCustomObject]@{
+            ToolName = "browserQa"
+            ServerName = "playwright"
+            Runner = "npx"
+            Package = "@playwright/mcp@1.2.3"
+            StartArgs = @()
+        }
+        $launcherArgs = @(Get-RunMcpLauncherArgs -Server $server)
+        $launcherArgs | Should -Contain "-ToolName"
+        $launcherArgs | Should -Contain "browserQa"
+    }
+
+    It "infers the tool for launchers generated before tool identity was recorded" {
+        $context = Resolve-RunMcpCatalogContext -RequestedServerName "gtm" -RequestedRunner "npx" -RequestedPackage "mcp-remote@1.2.3"
+        $context.ToolName | Should -Be "googleTagManager"
+    }
+
+    It "does not expose another tool's dummy credentials to a local MCP" {
+        $envPath = Join-Path $TestDrive "isolated.env"
+        Set-Content -LiteralPath $envPath -Value @(
+            "TRELLO_API_KEY=dummy-trello-key",
+            "GOOGLE_APPLICATION_CREDENTIALS=$TestDrive\dummy-adc.json"
+        )
+        [Environment]::SetEnvironmentVariable("TRELLO_API_KEY", "inherited-dummy-trello-key", "Process")
+        [Environment]::SetEnvironmentVariable("GOOGLE_APPLICATION_CREDENTIALS", "$TestDrive\inherited-dummy-adc.json", "Process")
+
+        Set-RunMcpEnvironment -RequestedToolName "browserQa" -RequestedServerName "playwright" -RequestedRunner "npx" -RequestedPackage "@playwright/mcp@1.2.3" -DotEnvPath $envPath
+
+        [Environment]::GetEnvironmentVariable("TRELLO_API_KEY", "Process") | Should -BeNullOrEmpty
+        [Environment]::GetEnvironmentVariable("GOOGLE_APPLICATION_CREDENTIALS", "Process") | Should -BeNullOrEmpty
+    }
+
+    It "passes only the selected Google Drive dummy paths and required aliases" {
+        $envPath = Join-Path $TestDrive "drive.env"
+        $oauthPath = Join-Path $TestDrive "oauth-client.json"
+        $tokenPath = Join-Path $TestDrive "drive-token.json"
+        Set-Content -LiteralPath $envPath -Value @(
+            "GOOGLE_OAUTH_CLIENT_JSON=$oauthPath",
+            "GDRIVE_CREDENTIALS_PATH=$tokenPath",
+            "TRELLO_TOKEN=dummy-unrelated-token",
+            "GOOGLE_APPLICATION_CREDENTIALS=$TestDrive\dummy-adc.json"
+        )
+
+        Set-RunMcpEnvironment -RequestedToolName "googleDrive" -RequestedServerName "google-drive" -RequestedRunner "npx" -RequestedPackage "@piotr-agier/google-drive-mcp@1.2.3" -DotEnvPath $envPath
+
+        [Environment]::GetEnvironmentVariable("GOOGLE_OAUTH_CLIENT_JSON", "Process") | Should -Be $oauthPath
+        [Environment]::GetEnvironmentVariable("GDRIVE_OAUTH_PATH", "Process") | Should -Be $oauthPath
+        [Environment]::GetEnvironmentVariable("GOOGLE_DRIVE_OAUTH_CREDENTIALS", "Process") | Should -Be $oauthPath
+        [Environment]::GetEnvironmentVariable("GOOGLE_DRIVE_MCP_TOKEN_PATH", "Process") | Should -Be $tokenPath
+        [Environment]::GetEnvironmentVariable("TRELLO_TOKEN", "Process") | Should -BeNullOrEmpty
+        [Environment]::GetEnvironmentVariable("GOOGLE_APPLICATION_CREDENTIALS", "Process") | Should -BeNullOrEmpty
     }
 }
 

@@ -24,6 +24,7 @@ Do not copy provider details into this file. Update the catalog when a provider 
 - During setup, use `Apply -Preview` before changing MCP client configuration.
 - Do not overwrite an unowned MCP server name. Preserve unrelated client configuration and keep generated backups.
 - Never print, commit, or place secrets in reusable files. Use ignored `secrets/.env.local` or the documented `KEY_FILE` pattern.
+- Pass only the selected provider's declared environment keys to a local MCP process; never expose the complete local credential map to every MCP.
 - Never reuse credentials from a previous employer, agency, or client.
 - Tell the user when company data will pass through a third-party hosted MCP or broker.
 - Treat credentials or token-file presence as incomplete. A tool is ready only after it is configured, authenticated, visible in the current client, and verified by a read-only call.
@@ -97,7 +98,7 @@ Ask tool-specific credential questions only after selection. Do not make profile
    powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\WebAnalystSetup.ps1 -Action Status
    ```
 
-9. Run the selected catalog entry's `testPrompt`. Identify the connected account, property, container, project, dataset, site, or workspace without exposing unnecessary data.
+9. Run the selected catalog entry's `testPrompt`. Ask for the intended target before any inventory call, and identify only that account, property, container, project, dataset, site, or workspace without exposing unnecessary data.
 
 10. Record factual evidence after each successful stage:
 

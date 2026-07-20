@@ -25,3 +25,5 @@ instructions as security-sensitive areas.
 
 Do not commit secrets, exported client data, private screenshots, tokens,
 cookies, `.env` files, or generated local configuration containing credentials.
+Local MCP launchers must receive only the credential and configuration keys
+declared for their selected tool/provider, never the complete local secret map.

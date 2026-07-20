@@ -208,24 +208,29 @@ function Get-ObjectFingerprint {
 }
 
 function Get-OwnershipStatePath {
-    return Join-Path $OwnershipRoot ((Get-InstallationId) + ".json")
+    param([switch]$ReadOnly)
+    $installationId = Get-InstallationId -ReadOnly:$ReadOnly
+    if ([string]::IsNullOrWhiteSpace($installationId)) { return $null }
+    return Join-Path $OwnershipRoot ($installationId + ".json")
 }
 
 function Get-InstallationId {
-    param([string]$Path = $InstallationIdPath)
+    param([string]$Path = $InstallationIdPath, [switch]$ReadOnly)
     if (Test-Path -LiteralPath $Path) {
         $existingId = (Get-Content -Raw -LiteralPath $Path).Trim()
         $parsed = [Guid]::Empty
         if ([Guid]::TryParse($existingId, [ref]$parsed)) { return $parsed.ToString() }
     }
+    if ($ReadOnly) { return $null }
     $newId = [Guid]::NewGuid().ToString()
     Set-Content -LiteralPath $Path -Value $newId -Encoding ASCII
     return $newId
 }
 
 function Read-OwnershipState {
-    $path = Get-OwnershipStatePath
-    if (-not (Test-Path -LiteralPath $path)) {
+    param([switch]$ReadOnly)
+    $path = Get-OwnershipStatePath -ReadOnly:$ReadOnly
+    if ([string]::IsNullOrWhiteSpace($path) -or -not (Test-Path -LiteralPath $path)) {
         return @{
             version = 1
             kitRoot = [string]$Root
@@ -988,6 +993,13 @@ function Test-CommandWorks {
     return (Test-ExecutableWorks -Path $cmd.Source -CommandArgs $Args)
 }
 
+function Assert-WinGetAvailable {
+    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+        throw "winget was not found. Install Windows Package Manager, then rerun this script."
+    }
+    Write-Host "winget: $(& winget --version)"
+}
+
 function Get-PythonCommand {
     if (Test-CommandWorks -Command "py") { return (Get-Command py).Source }
 
@@ -1040,6 +1052,7 @@ function Ensure-PythonAndPipx {
     Write-Step "Checking Python and pipx"
     $python = Get-PythonCommand
     if (-not $python) {
+        Assert-WinGetAvailable
         winget install --id Python.Python.3.12 --source winget --scope user --silent --accept-package-agreements --accept-source-agreements
         $python = Get-PythonCommand
     }
@@ -1073,6 +1086,7 @@ function Ensure-GoogleCloudCli {
     Write-Step "Checking Google Cloud CLI"
     $gcloud = Get-GcloudCommand
     if (-not $gcloud) {
+        Assert-WinGetAvailable
         winget install --id Google.CloudSDK --source winget --silent --accept-package-agreements --accept-source-agreements
         $gcloud = Get-GcloudCommand
     } else {
@@ -1603,56 +1617,60 @@ function Get-AllCatalogMcpItems {
     return $items
 }
 
+function Get-PrerequisiteNeeds {
+    param($SelectedItems, [bool]$IncludePython)
+    $needsNode = $false
+    $needsPython = $IncludePython
+    $needsGcloud = $false
+    foreach ($selected in @($SelectedItems)) {
+        $item = $selected.Item
+        if ($item.runner -eq "npx") { $needsNode = $true }
+        if ($item.runner -eq "pipx") { $needsPython = $true }
+        if ($item.authMode -in @("application_default_credentials", "company_oauth_adc")) { $needsGcloud = $true }
+    }
+    return [PSCustomObject]@{
+        NeedsNode = $needsNode
+        NeedsPython = $needsPython
+        NeedsGcloud = $needsGcloud
+    }
+}
+
 function Invoke-Prereqs {
     $selectedItems = @(Get-SelectedCatalogItems)
-    $needsPython = [bool]$InstallPython
-    $needsGcloud = $false
-    foreach ($selected in $selectedItems) {
-        $item = $selected.Item
-        if ($item.runner -eq "pipx") { $needsPython = $true }
-        if ($item.authMode -eq "application_default_credentials" -or $item.authMode -eq "company_oauth_adc") { $needsGcloud = $true }
-        if ($item.authMode -ne "company_oauth_remote" -and $null -ne $item.requiredGoogleServices -and @($item.requiredGoogleServices).Count -gt 0) { $needsGcloud = $true }
+    $needs = Get-PrerequisiteNeeds -SelectedItems $selectedItems -IncludePython ([bool]$InstallPython)
+
+    if (-not $needs.NeedsNode -and -not $needs.NeedsPython -and -not $needs.NeedsGcloud) {
+        Write-Host "No local system runtime is required by the selected providers."
     }
 
-    Write-Step "Checking winget"
-    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
-        throw "winget was not found. Install Windows Package Manager, then rerun this script."
-    }
-    Write-Host "winget: $(& winget --version)"
-
-    Write-Step "Checking Node.js LTS"
-    Ensure-NodeOnPath
-    $node = Get-Command node -ErrorAction SilentlyContinue
-    $nodeMajor = $null
-    if ($node) {
-        $raw = & node --version
-        if ($raw -match "v(\d+)") { $nodeMajor = [int]$matches[1] }
-    }
-    if (-not $nodeMajor -or $nodeMajor -lt 18) {
-        winget install --id OpenJS.NodeJS.LTS --source winget --scope user --silent --accept-package-agreements --accept-source-agreements
+    if ($needs.NeedsNode) {
+        Write-Step "Checking Node.js LTS"
+        Ensure-NodeOnPath
+        $node = Get-Command node -ErrorAction SilentlyContinue
+        $nodeMajor = $null
+        if ($node) {
+            $raw = & node --version
+            if ($raw -match "v(\d+)") { $nodeMajor = [int]$matches[1] }
+        }
+        if (-not $nodeMajor) {
+            Assert-WinGetAvailable
+            winget install --id OpenJS.NodeJS.LTS --source winget --scope user --silent --accept-package-agreements --accept-source-agreements
+        } elseif ($nodeMajor -lt 22) {
+            Write-Host "node: $raw is below the supported Node.js 22+ LTS baseline; upgrading the selected prerequisite."
+            Assert-WinGetAvailable
+            winget upgrade --id OpenJS.NodeJS.LTS --source winget --silent --accept-package-agreements --accept-source-agreements | Out-Host
+        } else {
+            Write-Host "node: $raw"
+        }
+        Ensure-NodeOnPath
+        $npmCommand = Resolve-Npm
+        Write-Host "npm: $(& $npmCommand --version)"
     } else {
-        Write-Host "node: $(& node --version)"
-        winget upgrade --id OpenJS.NodeJS.LTS --source winget --silent --accept-package-agreements --accept-source-agreements | Out-Host
-    }
-    Ensure-NodeOnPath
-    $npmCommand = Resolve-Npm
-    Write-Host "npm: $(& $npmCommand --version)"
-
-    Write-Step "Checking Git"
-    $git = Get-GitCommand
-    if (-not $git) {
-        winget install --id Git.Git --source winget --scope user --silent --accept-package-agreements --accept-source-agreements
-        $git = Get-GitCommand
-    } else {
-        Write-Host "git: $(& $git --version)"
-    }
-    if ($git) {
-        $gitDir = Split-Path -Parent $git
-        if ($env:PATH -notlike "*$gitDir*") { $env:PATH = "$gitDir;$env:PATH" }
+        Write-Host "Node.js: not required by the selected providers."
     }
 
-    if ($needsPython) { Ensure-PythonAndPipx }
-    if ($needsGcloud) { Ensure-GoogleCloudCli }
+    if ($needs.NeedsPython) { Ensure-PythonAndPipx }
+    if ($needs.NeedsGcloud) { Ensure-GoogleCloudCli }
     Invoke-CheckMcpUpdates
 }
 
@@ -2261,7 +2279,7 @@ function ConvertTo-McpArgsBase64 {
 }
 
 function Get-RunMcpLauncherArgs {
-    param($Server)
+    param($Server, [switch]$WithoutToolIdentity)
 
     $args = @(
         "-NoProfile",
@@ -2278,6 +2296,11 @@ function Get-RunMcpLauncherArgs {
         "-Package",
         $Server.Package
     )
+
+    if (-not $WithoutToolIdentity -and -not [string]::IsNullOrWhiteSpace([string]$Server.ToolName)) {
+        $args += "-ToolName"
+        $args += [string]$Server.ToolName
+    }
 
     if ($Server.StartArgs.Count -gt 0) {
         $args += "-McpArgsBase64"
@@ -2338,18 +2361,23 @@ function Get-CatalogServerNames {
 }
 
 function New-McpJsonObject {
-    param($Servers)
+    param(
+        $Servers,
+        [ValidateSet("Claude", "Gemini")]
+        [string]$ClientName = "Claude"
+    )
     $mcpServers = @{}
     foreach ($server in $Servers) {
         if ($server.Transport -eq "http") {
-            $mcpServers[$server.ServerName] = @{
-                url = $server.Url
+            if ($ClientName -eq "Gemini") {
+                $mcpServers[$server.ServerName] = @{ httpUrl = $server.Url }
+            } else {
+                $mcpServers[$server.ServerName] = @{ type = "http"; url = $server.Url }
             }
             if (-not [string]::IsNullOrWhiteSpace($server.BearerTokenEnvVar)) {
-                $mcpServers[$server.ServerName].bearer_token_env_var = $server.BearerTokenEnvVar
-            }
-            if ($server.RequiredScopes.Count -gt 0) {
-                $mcpServers[$server.ServerName].scopes = @($server.RequiredScopes)
+                $mcpServers[$server.ServerName].headers = @{
+                    Authorization = 'Bearer ${' + $server.BearerTokenEnvVar + '}'
+                }
             }
         } else {
             $mcpServers[$server.ServerName] = @{
@@ -2373,7 +2401,7 @@ function ConvertTo-TomlArray {
 }
 
 function New-CodexToml {
-    param($Servers)
+    param($Servers, [switch]$WithoutToolIdentity)
     $lines = @()
     $lines += "# BEGIN WEB_ANALYST_MCP_MANAGED"
     foreach ($server in $Servers) {
@@ -2387,7 +2415,7 @@ function New-CodexToml {
                 $lines += "scopes = " + (ConvertTo-TomlArray @($server.RequiredScopes))
             }
         } else {
-            $baseArgs = @(Get-RunMcpLauncherArgs -Server $server)
+            $baseArgs = @(Get-RunMcpLauncherArgs -Server $server -WithoutToolIdentity:$WithoutToolIdentity)
             $args = $baseArgs | ForEach-Object { ConvertTo-TomlString $_ }
             $lines += "command = " + (ConvertTo-TomlString "powershell.exe")
             $lines += "args = [$($args -join ', ')]"
@@ -2435,15 +2463,58 @@ function Get-McpConfiguredSummary {
     }
 }
 
-function Update-ManagedTextBlock {
-    param([string]$Path, [string]$Block)
-    $pattern = "(?s)\r?\n?# BEGIN WEB_ANALYST_MCP_MANAGED.*?# END WEB_ANALYST_MCP_MANAGED\r?\n?"
-    $content = ""
-    if (Test-Path -LiteralPath $Path) {
-        $content = [regex]::Replace((Get-Content -Raw -LiteralPath $Path), $pattern, [Environment]::NewLine)
+function Get-CodexManagedBlock {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return $null }
+
+    $content = Get-Content -Raw -LiteralPath $Path
+    $beginCount = ([regex]::Matches($content, "# BEGIN WEB_ANALYST_MCP_MANAGED")).Count
+    $endCount = ([regex]::Matches($content, "# END WEB_ANALYST_MCP_MANAGED")).Count
+    if ($beginCount -ne $endCount -or $beginCount -gt 1) {
+        throw "Codex config $Path contains malformed or duplicate web-analyst managed-block markers. Resolve them explicitly before Apply or reset."
     }
-    $newContent = $content.TrimEnd() + [Environment]::NewLine + [Environment]::NewLine + $Block + [Environment]::NewLine
-    Set-Content -LiteralPath $Path -Value $newContent -Encoding UTF8
+    if ($beginCount -eq 0) { return $null }
+
+    $match = [regex]::Match($content, "(?s)# BEGIN WEB_ANALYST_MCP_MANAGED.*?# END WEB_ANALYST_MCP_MANAGED")
+    if (-not $match.Success) {
+        throw "Codex config $Path contains an unreadable web-analyst managed block. Resolve it explicitly before Apply or reset."
+    }
+    return $match.Value
+}
+
+function Update-ManagedTextBlock {
+    param(
+        [string]$Path,
+        [string]$Block,
+        [string]$ExpectedFingerprint,
+        [switch]$PreviewOnly
+    )
+
+    $currentBlock = Get-CodexManagedBlock -Path $Path
+    $desiredFingerprint = Get-ObjectFingerprint -InputObject $Block
+    if ($null -ne $currentBlock) {
+        $currentFingerprint = Get-ObjectFingerprint -InputObject $currentBlock
+        if (-not [string]::IsNullOrWhiteSpace($ExpectedFingerprint)) {
+            if ($currentFingerprint -ne $ExpectedFingerprint) {
+                throw "Codex config $Path contains a user-modified managed block. The kit will not overwrite it."
+            }
+        } elseif ($currentFingerprint -ne $desiredFingerprint) {
+            throw "Codex config $Path contains an unowned or user-modified managed block. The kit will not overwrite it."
+        }
+    }
+
+    if (-not $PreviewOnly) {
+        $pattern = "(?s)\r?\n?# BEGIN WEB_ANALYST_MCP_MANAGED.*?# END WEB_ANALYST_MCP_MANAGED\r?\n?"
+        $content = ""
+        if (Test-Path -LiteralPath $Path) {
+            $content = [regex]::Replace((Get-Content -Raw -LiteralPath $Path), $pattern, [Environment]::NewLine)
+        }
+        $directory = Split-Path -Parent $Path
+        if ($directory) { New-Item -ItemType Directory -Force $directory | Out-Null }
+        $newContent = $content.TrimEnd() + [Environment]::NewLine + [Environment]::NewLine + $Block + [Environment]::NewLine
+        Set-Content -LiteralPath $Path -Value $newContent -Encoding UTF8
+    }
+    return $desiredFingerprint
 }
 
 function Assert-NoCodexServerNameCollision {
@@ -2538,7 +2609,7 @@ function Remove-OwnedMcpJsonEntries {
 
 function Invoke-Generate {
     $servers = @(Get-EnabledMcpServers)
-    $jsonObject = New-McpJsonObject -Servers $servers
+    $jsonObject = New-McpJsonObject -Servers $servers -ClientName "Claude"
     $codexToml = New-CodexToml -Servers $servers
     New-Item -ItemType Directory -Force $GeneratedDir | Out-Null
     Write-JsonFile -Object $jsonObject -Path (Join-Path $GeneratedDir "mcp.json")
@@ -2550,11 +2621,11 @@ function Invoke-Apply {
     $servers = @(Get-EnabledMcpServers)
     if ($servers.Count -eq 0) { throw "No enabled MCP servers are ready to apply." }
 
-    $jsonObject = New-McpJsonObject -Servers $servers
     $codexToml = New-CodexToml -Servers $servers
+    $legacyCodexToml = New-CodexToml -Servers $servers -WithoutToolIdentity
     $selection = Get-Content -Raw -LiteralPath $SelectionPath | ConvertFrom-Json
     $targetClients = @(Resolve-TargetClients -Selection $selection)
-    $ownership = Read-OwnershipState
+    $ownership = Read-OwnershipState -ReadOnly:$Preview
     $plans = @()
 
     foreach ($clientName in $targetClients) {
@@ -2565,9 +2636,22 @@ function Invoke-Apply {
         }
 
         if ($clientName -eq "Codex") {
+            if (-not $prior.ContainsKey("managedBlock") -and $ownership["clients"].ContainsKey($clientName)) {
+                $ownedClient = $ownership["clients"][$clientName]
+                $currentManagedBlock = Get-CodexManagedBlock -Path $path
+                if ($ownedClient.ContainsKey("format") -and [string]$ownedClient["format"] -eq "toml-managed-block" -and $null -ne $currentManagedBlock) {
+                    $currentManagedBlockFingerprint = Get-ObjectFingerprint -InputObject $currentManagedBlock
+                    if ($currentManagedBlockFingerprint -eq (Get-ObjectFingerprint -InputObject $legacyCodexToml)) {
+                        $prior["managedBlock"] = $currentManagedBlockFingerprint
+                    }
+                }
+            }
             Assert-NoCodexServerNameCollision -Path $path -ServerNames @($servers | ForEach-Object { $_.ServerName })
+            $priorManagedBlockFingerprint = if ($prior.ContainsKey("managedBlock")) { [string]$prior["managedBlock"] } else { "" }
+            Update-ManagedTextBlock -Path $path -Block $codexToml -ExpectedFingerprint $priorManagedBlockFingerprint -PreviewOnly | Out-Null
         } else {
-            Set-ManagedMcpJsonFile -Path $path -NewObject $jsonObject -PriorFingerprints $prior -PreviewOnly | Out-Null
+            $clientJsonObject = New-McpJsonObject -Servers $servers -ClientName $clientName
+            Set-ManagedMcpJsonFile -Path $path -NewObject $clientJsonObject -PriorFingerprints $prior -PreviewOnly | Out-Null
         }
 
         $plans += [PSCustomObject]@{
@@ -2575,11 +2659,12 @@ function Invoke-Apply {
             Path = $path
             Existing = if (Test-Path -LiteralPath $path) { "Yes" } else { "No" }
             Servers = (@($servers | ForEach-Object { $_.ServerName }) -join ", ")
+            PriorFingerprints = $prior
         }
     }
 
     Write-Step "MCP configuration plan"
-    Write-Host (($plans | Format-Table -AutoSize | Out-String -Width 260).TrimEnd())
+    Write-Host (($plans | Select-Object Client, Path, Existing, Servers | Format-Table -AutoSize | Out-String -Width 260).TrimEnd())
     if ($Preview) {
         Write-Host "Preview only. No MCP client configuration was changed."
         return
@@ -2590,16 +2675,16 @@ function Invoke-Apply {
         $directory = Split-Path -Parent $plan.Path
         if ($directory) { New-Item -ItemType Directory -Force $directory | Out-Null }
         $backup = New-ConfigBackup -Path $plan.Path
-        $prior = @{}
-        if ($ownership["clients"].ContainsKey($plan.Client) -and $ownership["clients"][$plan.Client].ContainsKey("fingerprints")) {
-            $prior = ConvertTo-Hashtable $ownership["clients"][$plan.Client]["fingerprints"]
-        }
+        $prior = ConvertTo-Hashtable $plan.PriorFingerprints
 
         $fingerprints = @{}
         if ($plan.Client -eq "Codex") {
-            Update-ManagedTextBlock -Path $plan.Path -Block $codexToml
+            $priorManagedBlockFingerprint = if ($prior.ContainsKey("managedBlock")) { [string]$prior["managedBlock"] } else { "" }
+            $managedBlockFingerprint = Update-ManagedTextBlock -Path $plan.Path -Block $codexToml -ExpectedFingerprint $priorManagedBlockFingerprint
+            $fingerprints["managedBlock"] = $managedBlockFingerprint
         } else {
-            $fingerprints = Set-ManagedMcpJsonFile -Path $plan.Path -NewObject $jsonObject -PriorFingerprints $prior
+            $clientJsonObject = New-McpJsonObject -Servers $servers -ClientName $plan.Client
+            $fingerprints = Set-ManagedMcpJsonFile -Path $plan.Path -NewObject $clientJsonObject -PriorFingerprints $prior
         }
 
         $ownership["clients"][$plan.Client] = @{
@@ -2911,12 +2996,22 @@ function Invoke-Dashboard {
 }
 
 function Remove-CodexManagedBlock {
-    param([string]$Path)
+    param([string]$Path, [string]$ExpectedFingerprint)
     if (-not (Test-Path -LiteralPath $Path)) { return $false }
 
     $content = Get-Content -Raw -LiteralPath $Path
     $managedPattern = "(?s)\r?\n?# BEGIN WEB_ANALYST_MCP_MANAGED.*?# END WEB_ANALYST_MCP_MANAGED\r?\n?"
     if ($content -notmatch $managedPattern) { return $false }
+
+    $managedBlock = Get-CodexManagedBlock -Path $Path
+    if ([string]::IsNullOrWhiteSpace($ExpectedFingerprint)) {
+        Write-Warning "Preserving the Codex managed block in $Path because no ownership fingerprint is recorded. Re-apply an unchanged block first if you want the kit to adopt it safely."
+        return $false
+    }
+    if ((Get-ObjectFingerprint -InputObject $managedBlock) -ne $ExpectedFingerprint) {
+        Write-Warning "Preserving the Codex managed block in $Path because it changed after the kit last managed it."
+        return $false
+    }
 
     $content = [regex]::Replace($content, $managedPattern, [Environment]::NewLine).TrimEnd()
     if ($content) {
@@ -2957,8 +3052,17 @@ function Invoke-ResetMcpConfig {
         if ($clientName -eq "Codex") {
             $content = Get-Content -Raw -LiteralPath $path
             if ($content -match "# BEGIN WEB_ANALYST_MCP_MANAGED") {
-                $backup = New-ConfigBackup -Path $path
-                if (Remove-CodexManagedBlock -Path $path) {
+                $managedBlockFingerprint = ""
+                if ($ownedClient -and $ownedClient.ContainsKey("fingerprints")) {
+                    $codexFingerprints = ConvertTo-Hashtable $ownedClient["fingerprints"]
+                    if ($codexFingerprints.ContainsKey("managedBlock")) {
+                        $managedBlockFingerprint = [string]$codexFingerprints["managedBlock"]
+                    }
+                }
+                $currentManagedBlock = Get-CodexManagedBlock -Path $path
+                $canRemove = -not [string]::IsNullOrWhiteSpace($managedBlockFingerprint) -and (Get-ObjectFingerprint -InputObject $currentManagedBlock) -eq $managedBlockFingerprint
+                $backup = if ($canRemove) { New-ConfigBackup -Path $path } else { $null }
+                if (Remove-CodexManagedBlock -Path $path -ExpectedFingerprint $managedBlockFingerprint) {
                     Write-Host "Removed the kit-owned Codex MCP block from: $path"
                     Write-Host "Backup: $backup"
                 }
@@ -3068,6 +3172,145 @@ function Protect-LocalGoogleOAuthMcpEnvironment {
     }
 }
 
+function Get-CatalogEnvironmentKeys {
+    param($Item)
+    $keys = @()
+    foreach ($field in @("credentialKeys", "optionalCredentialKeys", "urlEnvKey", "bearerTokenEnvVar")) {
+        if ($null -eq $Item.$field) { continue }
+        foreach ($key in @($Item.$field)) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$key)) { $keys += [string]$key }
+        }
+    }
+    foreach ($fileKey in @($keys | Where-Object { $_ -like "*_FILE" })) {
+        $keys += $fileKey.Substring(0, $fileKey.Length - 5)
+    }
+    return @($keys | Select-Object -Unique)
+}
+
+function Resolve-RunMcpCatalogContext {
+    param(
+        [string]$RequestedToolName,
+        [string]$RequestedServerName,
+        [string]$RequestedRunner,
+        [string]$RequestedPackage
+    )
+
+    $requestedPackageName = if ($RequestedRunner -eq "npx") {
+        Get-NpmLookupName -PackageName $RequestedPackage
+    } else {
+        $RequestedPackage -replace "==.*$", ""
+    }
+    $candidates = @(Get-AllCatalogMcpItems | Where-Object {
+        $candidatePackageName = if ([string]$_.Item.runner -eq "npx") {
+            Get-NpmLookupName -PackageName ([string]$_.Item.package)
+        } else {
+            [string]$_.Item.package -replace "==.*$", ""
+        }
+        ([string]::IsNullOrWhiteSpace($RequestedToolName) -or $_.ToolName -eq $RequestedToolName) -and
+        [string]$_.Item.serverName -eq $RequestedServerName -and
+        [string]$_.Item.runner -eq $RequestedRunner -and
+        $candidatePackageName -eq $requestedPackageName
+    })
+
+    if ($candidates.Count -ne 1) {
+        $toolDescription = if ([string]::IsNullOrWhiteSpace($RequestedToolName)) { "server '$RequestedServerName'" } else { "tool '$RequestedToolName'" }
+        throw "RunMcp could not resolve $toolDescription to exactly one cataloged provider for the requested runner and package. Re-run Apply to refresh the managed client configuration."
+    }
+    return $candidates[0]
+}
+
+function Set-RunMcpEnvironment {
+    param(
+        [string]$RequestedToolName,
+        [string]$RequestedServerName,
+        [string]$RequestedRunner,
+        [string]$RequestedPackage,
+        [string]$DotEnvPath = $EnvPath
+    )
+
+    $context = Resolve-RunMcpCatalogContext -RequestedToolName $RequestedToolName -RequestedServerName $RequestedServerName -RequestedRunner $RequestedRunner -RequestedPackage $RequestedPackage
+    $envMap = Import-DotEnvMap -Path $DotEnvPath
+    $allowedKeys = @(Get-CatalogEnvironmentKeys -Item $context.Item)
+
+    if ($context.ToolName -eq "googleDrive") {
+        $allowedKeys += @("GDRIVE_OAUTH_PATH", "GOOGLE_REFRESH_TOKEN")
+    } elseif ($context.ToolName -eq "gmail") {
+        $allowedKeys += @("GMAIL_OAUTH_PATH", "GOOGLE_REFRESH_TOKEN")
+    }
+    $allowedKeys = @($allowedKeys | Select-Object -Unique)
+
+    $managedKeys = @($envMap.Keys)
+    foreach ($catalogItem in @(Get-AllCatalogMcpItems)) {
+        $managedKeys += @(Get-CatalogEnvironmentKeys -Item $catalogItem.Item)
+    }
+    $managedKeys += @(
+        "CLIENT_ID",
+        "CLIENT_SECRET",
+        "REFRESH_TOKEN",
+        "GOOGLE_REFRESH_TOKEN",
+        "GOOGLE_DRIVE_OAUTH_CREDENTIALS",
+        "GOOGLE_DRIVE_MCP_TOKEN_PATH",
+        "GDRIVE_OAUTH_PATH",
+        "GMAIL_OAUTH_PATH"
+    )
+    $managedKeys = @($managedKeys | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Select-Object -Unique)
+
+    $selectedValues = @{}
+    foreach ($key in $allowedKeys) {
+        if ($envMap.ContainsKey($key)) {
+            $selectedValues[$key] = [string]$envMap[$key]
+        } else {
+            $selectedValues[$key] = [Environment]::GetEnvironmentVariable($key, "Process")
+        }
+    }
+
+    foreach ($key in $managedKeys) {
+        [Environment]::SetEnvironmentVariable([string]$key, $null, "Process")
+    }
+    foreach ($key in $selectedValues.Keys) {
+        $value = [string]$selectedValues[$key]
+        if (-not [string]::IsNullOrWhiteSpace($value)) {
+            [Environment]::SetEnvironmentVariable([string]$key, $value, "Process")
+        }
+    }
+
+    if ($context.ToolName -in @("googleDrive", "gmail")) {
+        $googleClientId = [Environment]::GetEnvironmentVariable("GOOGLE_CLIENT_ID", "Process")
+        $googleClientSecret = [Environment]::GetEnvironmentVariable("GOOGLE_CLIENT_SECRET", "Process")
+        $googleRefreshToken = [Environment]::GetEnvironmentVariable("GOOGLE_REFRESH_TOKEN", "Process")
+        if ($googleClientId) { [Environment]::SetEnvironmentVariable("CLIENT_ID", $googleClientId, "Process") }
+        if ($googleClientSecret) { [Environment]::SetEnvironmentVariable("CLIENT_SECRET", $googleClientSecret, "Process") }
+        if ($googleRefreshToken) { [Environment]::SetEnvironmentVariable("REFRESH_TOKEN", $googleRefreshToken, "Process") }
+    }
+
+    if ($context.ToolName -eq "googleDrive") {
+        $driveOAuthPath = [Environment]::GetEnvironmentVariable("GDRIVE_OAUTH_PATH", "Process")
+        if (-not $driveOAuthPath) {
+            $driveOAuthPath = [Environment]::GetEnvironmentVariable("GOOGLE_OAUTH_CLIENT_JSON", "Process")
+            if ($driveOAuthPath) { [Environment]::SetEnvironmentVariable("GDRIVE_OAUTH_PATH", $driveOAuthPath, "Process") }
+        }
+        if ($driveOAuthPath) { [Environment]::SetEnvironmentVariable("GOOGLE_DRIVE_OAUTH_CREDENTIALS", $driveOAuthPath, "Process") }
+
+        $driveTokenPath = [Environment]::GetEnvironmentVariable("GDRIVE_CREDENTIALS_PATH", "Process")
+        if ($driveTokenPath) { [Environment]::SetEnvironmentVariable("GOOGLE_DRIVE_MCP_TOKEN_PATH", $driveTokenPath, "Process") }
+    } elseif ($context.ToolName -eq "gmail") {
+        $gmailOAuthPath = [Environment]::GetEnvironmentVariable("GMAIL_OAUTH_PATH", "Process")
+        if (-not $gmailOAuthPath) {
+            $gmailOAuthPath = [Environment]::GetEnvironmentVariable("GOOGLE_OAUTH_CLIENT_JSON", "Process")
+            if ($gmailOAuthPath) { [Environment]::SetEnvironmentVariable("GMAIL_OAUTH_PATH", $gmailOAuthPath, "Process") }
+        }
+    }
+
+    foreach ($pathKey in @("GDRIVE_OAUTH_PATH", "GDRIVE_CREDENTIALS_PATH", "GMAIL_OAUTH_PATH", "GMAIL_CREDENTIALS_PATH", "GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_DRIVE_OAUTH_CREDENTIALS", "GOOGLE_DRIVE_MCP_TOKEN_PATH")) {
+        $pathValue = [Environment]::GetEnvironmentVariable($pathKey, "Process")
+        if (-not $pathValue) { continue }
+        $expanded = [Environment]::ExpandEnvironmentVariables($pathValue)
+        [Environment]::SetEnvironmentVariable($pathKey, $expanded, "Process")
+        $parent = Split-Path -Parent $expanded
+        if ($parent) { New-Item -ItemType Directory -Force $parent | Out-Null }
+    }
+}
+
 function Set-JsonProperty {
     param(
         [Parameter(Mandatory = $true)]$Object,
@@ -3174,44 +3417,7 @@ function Invoke-RunMcp {
         throw "RunMcp requires -ServerName and -Package."
     }
 
-    Import-DotEnvMap -Path $EnvPath -IntoProcess | Out-Null
-
-    $googleClientId = [Environment]::GetEnvironmentVariable("GOOGLE_CLIENT_ID", "Process")
-    $googleClientSecret = [Environment]::GetEnvironmentVariable("GOOGLE_CLIENT_SECRET", "Process")
-    $googleRefreshToken = [Environment]::GetEnvironmentVariable("GOOGLE_REFRESH_TOKEN", "Process")
-    if ($googleClientId -and -not [Environment]::GetEnvironmentVariable("CLIENT_ID", "Process")) {
-        [Environment]::SetEnvironmentVariable("CLIENT_ID", $googleClientId, "Process")
-    }
-    if ($googleClientSecret -and -not [Environment]::GetEnvironmentVariable("CLIENT_SECRET", "Process")) {
-        [Environment]::SetEnvironmentVariable("CLIENT_SECRET", $googleClientSecret, "Process")
-    }
-    if ($googleRefreshToken) {
-        if (-not [Environment]::GetEnvironmentVariable("REFRESH_TOKEN", "Process")) {
-            [Environment]::SetEnvironmentVariable("REFRESH_TOKEN", $googleRefreshToken, "Process")
-        }
-        if (-not [Environment]::GetEnvironmentVariable("GOOGLE_REFRESH_TOKEN", "Process")) {
-            [Environment]::SetEnvironmentVariable("GOOGLE_REFRESH_TOKEN", $googleRefreshToken, "Process")
-        }
-    }
-
-    foreach ($pathKey in @("GDRIVE_OAUTH_PATH", "GDRIVE_CREDENTIALS_PATH", "GMAIL_OAUTH_PATH", "GMAIL_CREDENTIALS_PATH", "GOOGLE_APPLICATION_CREDENTIALS")) {
-        $pathValue = [Environment]::GetEnvironmentVariable($pathKey, "Process")
-        if ($pathValue) {
-            $expanded = [Environment]::ExpandEnvironmentVariables($pathValue)
-            [Environment]::SetEnvironmentVariable($pathKey, $expanded, "Process")
-            $parent = Split-Path -Parent $expanded
-            if ($parent) { New-Item -ItemType Directory -Force $parent | Out-Null }
-        }
-    }
-
-    $driveOAuthPath = [Environment]::GetEnvironmentVariable("GDRIVE_OAUTH_PATH", "Process")
-    if ($driveOAuthPath -and -not [Environment]::GetEnvironmentVariable("GOOGLE_DRIVE_OAUTH_CREDENTIALS", "Process")) {
-        [Environment]::SetEnvironmentVariable("GOOGLE_DRIVE_OAUTH_CREDENTIALS", $driveOAuthPath, "Process")
-    }
-    $driveTokenPath = [Environment]::GetEnvironmentVariable("GDRIVE_CREDENTIALS_PATH", "Process")
-    if ($driveTokenPath -and -not [Environment]::GetEnvironmentVariable("GOOGLE_DRIVE_MCP_TOKEN_PATH", "Process")) {
-        [Environment]::SetEnvironmentVariable("GOOGLE_DRIVE_MCP_TOKEN_PATH", $driveTokenPath, "Process")
-    }
+    Set-RunMcpEnvironment -RequestedToolName $ToolName -RequestedServerName $ServerName -RequestedRunner $Runner -RequestedPackage $Package
 
     Protect-LocalGoogleOAuthMcpEnvironment
 

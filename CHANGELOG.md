@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.5.0 - Credential isolation and configuration integrity
+
+- Scoped each local MCP process to only the selected tool/provider environment keys, while retaining compatibility with v1.4 launchers that did not record the tool identity.
+- Added fingerprints for Codex managed TOML blocks so Apply and reset preserve user-modified content; exact v1.4-generated blocks can migrate safely.
+- Kept ownership lookup read-only during Apply preview and strengthened the Git hygiene test so a failed repository check cannot pass silently.
+- Made Prereqs install only selected-provider runtimes, stopped upgrading a healthy Node.js installation, removed the unrelated Git installation, and raised the Node baseline to a supported 22+ LTS line.
+- Generated documented remote MCP formats separately for Claude Code (`type: http` and `url`) and Gemini CLI (`httpUrl`), including environment-backed bearer headers where required.
+- Replaced broad account, property, project, workspace, board, and container enumeration smoke tests with target-first, minimally disclosing read-only checks.
+- Expanded the behavior and safety suite from 26 to 36 tests.
+
 ## v1.4.0 - Ownership, evidence, and reproducibility
 
 - Added an installable `SKILL.md` and Codex `agents/openai.yaml` metadata while keeping `AGENTS.md` as a lightweight cross-agent entry point.

@@ -36,7 +36,7 @@
       "supportsMcpLogin": "client-dependent",
       "supportsStaticOAuthClientForRemoteMcp": "client-dependent",
       "restartGuidance": "Restart the Gemini CLI session when newly generated MCP servers are not visible.",
-      "notes": "The kit writes settings.json-style MCP config through the same generated MCP object used for Claude."
+      "notes": "The kit writes settings.json-style MCP config with Gemini's streamable-HTTP httpUrl field; local stdio entries keep the standard command and args fields."
     }
   }
 }
