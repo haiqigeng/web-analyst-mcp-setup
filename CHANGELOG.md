@@ -9,6 +9,7 @@
 - Generated documented remote MCP formats separately for Claude Code (`type: http` and `url`) and Gemini CLI (`httpUrl`), including environment-backed bearer headers where required.
 - Replaced broad account, property, project, workspace, board, and container enumeration smoke tests with target-first, minimally disclosing read-only checks.
 - Expanded the behavior and safety suite from 26 to 36 tests.
+- Updated CI to the current Node 24-based official checkout action.
 
 ## v1.4.0 - Ownership, evidence, and reproducibility
 
