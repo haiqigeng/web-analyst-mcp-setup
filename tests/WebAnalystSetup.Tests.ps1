@@ -17,6 +17,7 @@ Describe "Reusable kit hygiene" {
         foreach ($path in @(
             "secrets/.env.local",
             "config/tool-selection.json",
+            "generated/setup-summary.md",
             "generated/onboarding-report.md",
             "generated/onboarding-state.json",
             "generated/mcp-version-lock.json",
@@ -34,8 +35,10 @@ Describe "Reusable kit hygiene" {
         }
     }
 
-    It "keeps reusable selection profile-free by default" {
+    It "keeps profiles out of the product surface" {
         $SelectionExample.PSObject.Properties.Name -contains "profile" | Should -BeFalse
+        Test-Path (Join-Path $RepoRoot "config\tool-profiles.json") | Should -BeFalse
+        Test-Path (Join-Path $RepoRoot "schemas\tool-profiles.schema.json") | Should -BeFalse
     }
 
     It "provides a valid skill adapter and UI metadata" {
@@ -91,6 +94,11 @@ Describe "Catalog provider metadata" {
         [string]$Catalog.googleTagManager.testPrompt | Should -Match "Do not enumerate"
         [string]$Catalog.bigQuery.testPrompt | Should -Match "confirmed project and dataset"
         [string]$Catalog.bigQuery.testPrompt | Should -Match "Do not enumerate"
+    }
+
+    It "keeps client-specific login commands out of the provider catalog" {
+        $catalogText = Get-Content -Raw -LiteralPath $CatalogPathForTest
+        $catalogText | Should -Not -Match '"authCommand"\s*:\s*"(?:codex|claude|gemini)\s+mcp\s+login'
     }
 }
 
@@ -364,6 +372,16 @@ Describe "Per-tool MCP credential isolation" {
         [Environment]::GetEnvironmentVariable("TRELLO_TOKEN", "Process") | Should -BeNullOrEmpty
         [Environment]::GetEnvironmentVariable("GOOGLE_APPLICATION_CREDENTIALS", "Process") | Should -BeNullOrEmpty
     }
+
+    It "uses an authorized process credential when the scoped local key is empty" {
+        $envPath = Join-Path $TestDrive "process-fallback.env"
+        Set-Content -LiteralPath $envPath -Value "GOOGLE_CLIENT_ID="
+        [Environment]::SetEnvironmentVariable("GOOGLE_CLIENT_ID", "authorized-process-client-id", "Process")
+
+        Set-RunMcpEnvironment -RequestedToolName "googleDrive" -RequestedServerName "google-drive" -RequestedRunner "npx" -RequestedPackage "@piotr-agier/google-drive-mcp@1.2.3" -DotEnvPath $envPath
+
+        [Environment]::GetEnvironmentVariable("GOOGLE_CLIENT_ID", "Process") | Should -Be "authorized-process-client-id"
+    }
 }
 
 Describe "Selected clients and exact version locks" {
@@ -372,6 +390,14 @@ Describe "Selected clients and exact version locks" {
             aiClients = [PSCustomObject]@{ codex = $true; claudeCode = $false; geminiCli = $true }
         }
         @(Resolve-TargetClients -Selection $selection -RequestedClient "Selected") | Should -Be @("Codex", "Gemini")
+    }
+
+    It "returns native remote OAuth guidance for every supported client" {
+        $capabilitiesPath = Join-Path $RepoRoot "config\client-capabilities.json"
+
+        (Get-ClientMcpLoginGuidance -ClientName "Codex" -RequestedServerName "clickup" -CapabilitiesFile $capabilitiesPath) | Should -Be "Run in PowerShell: codex mcp login clickup"
+        (Get-ClientMcpLoginGuidance -ClientName "Claude" -RequestedServerName "clickup" -CapabilitiesFile $capabilitiesPath) | Should -Be "Run in PowerShell: claude mcp login clickup"
+        (Get-ClientMcpLoginGuidance -ClientName "Gemini" -RequestedServerName "clickup" -CapabilitiesFile $capabilitiesPath) | Should -Be "Run inside Gemini CLI: /mcp auth clickup"
     }
 
     It "resolves an exact package from the local version lock" {
@@ -413,14 +439,17 @@ Describe "Evidence and action surface" {
             $loaded["toolEvidence"]["browserQa"]["stages"]["Verified"]["evidence"] | Should -Match "repeat"
     }
 
-    It "exposes preview, evidence, safe reset, and update-lock actions" {
-        $ScriptText | Should -Match '"RecordEvidence"'
+    It "exposes one safe Connect action plus advanced recovery controls" {
+        $ScriptText | Should -Match '"Connect"'
         $ScriptText | Should -Match '"ResetMcpConfig"'
+        $ScriptText | Should -Match '\[string\[\]\]\$Tools'
         $ScriptText | Should -Match '\[switch\]\$Preview'
+        $ScriptText | Should -Match '\[switch\]\$Confirmed'
         $ScriptText | Should -Match 'mcp-version-lock\.json'
     }
 
-    It "keeps user-facing safety outputs ignored and generated on demand" {
+    It "uses one primary handover while keeping specialist guides on demand" {
+        (Get-Content -Raw -LiteralPath (Join-Path $RepoRoot "scripts\lib\Connect.ps1")) | Should -Match 'setup-summary\.md'
         $ScriptText | Should -Match 'bigquery-safety-plan\.md'
         $ScriptText | Should -Match 'credential-guide\.md'
         $ScriptText | Should -Match 'mcp-update-check\.md'
@@ -436,6 +465,202 @@ Describe "Evidence and action surface" {
         )
         foreach ($canary in $canaries) {
             @($patterns | Where-Object { $canary -cmatch $_ }).Count | Should -BeGreaterThan 0
+        }
+    }
+}
+
+Describe "Utility-first Connect acceptance" {
+    It "documents the personal-or-organizational North Star explicitly" {
+        $skillText = Get-Content -Raw -LiteralPath (Join-Path $RepoRoot "SKILL.md")
+
+        $skillText | Should -Match '## North Star'
+        $skillText | Should -Match 'Achieve first-day setup success on any Windows PC'
+        $skillText | Should -Match 'personal PC may access organizational accounts'
+        $skillText | Should -Match 'organization-managed PC may access personal accounts'
+    }
+
+    It "assigns command execution to the agent and narrows vague everything requests" {
+        $skillText = Get-Content -Raw -LiteralPath (Join-Path $RepoRoot "SKILL.md")
+
+        $skillText | Should -Match 'Run all PowerShell commands and internal evidence updates for the user'
+        $skillText | Should -Match 'recommend the smallest relevant selection'
+        $skillText | Should -Match 'Never interpret "everything" as the entire catalog'
+        $skillText | Should -Not -Match '(?i)-Preset'
+    }
+
+    It "maps friendly analyst tool names to the catalog without exposing selection JSON" {
+        $selectionPath = Join-Path $TestDrive "tool-selection.json"
+        Set-ConversationSelection -RequestedTools @("GTM", "GA4", "Playwright") -RequestedClient "Codex" -SelectionFile $selectionPath -SelectionTemplateFile $SelectionExamplePathForTest -CatalogFile $CatalogPathForTest | Out-Null
+
+        $selection = Get-Content -Raw -LiteralPath $selectionPath | ConvertFrom-Json
+        @($selection.tools.PSObject.Properties | Where-Object { $_.Value.enabled } | ForEach-Object { $_.Name }) | Should -Be @("googleTagManager", "googleAnalytics", "browserQa")
+        $selection.aiClients.codex | Should -BeTrue
+        $selection.aiClients.claudeCode | Should -BeFalse
+        $selection.aiClients.geminiCli | Should -BeFalse
+    }
+
+    It "creates no credential file when the selected tools need no local secret" {
+        $selectionPath = Join-Path $TestDrive "tool-selection.json"
+        $envPath = Join-Path $TestDrive ".env.local"
+        Set-ConversationSelection -RequestedTools @("gtm", "playwright") -RequestedClient "Codex" -SelectionFile $selectionPath -SelectionTemplateFile $SelectionExamplePathForTest -CatalogFile $CatalogPathForTest | Out-Null
+
+        Sync-SelectedCredentialFile -SelectionFile $selectionPath -CatalogFile $CatalogPathForTest -TemplateFile (Join-Path $RepoRoot "secrets\.env.template") -TargetFile $envPath
+
+        Test-Path -LiteralPath $envPath | Should -BeFalse
+    }
+
+    It "writes only selected GA4 credential keys" {
+        $selectionPath = Join-Path $TestDrive "tool-selection.json"
+        $envPath = Join-Path $TestDrive ".env.local"
+        Set-ConversationSelection -RequestedTools @("ga4") -RequestedClient "Codex" -SelectionFile $selectionPath -SelectionTemplateFile $SelectionExamplePathForTest -CatalogFile $CatalogPathForTest | Out-Null
+
+        Sync-SelectedCredentialFile -SelectionFile $selectionPath -CatalogFile $CatalogPathForTest -TemplateFile (Join-Path $RepoRoot "secrets\.env.template") -TargetFile $envPath
+        $content = Get-Content -Raw -LiteralPath $envPath
+
+        $content | Should -Match '(?m)^GOOGLE_APPLICATION_CREDENTIALS='
+        $content | Should -Match '(?m)^GOOGLE_PROJECT_ID='
+        $content | Should -Not -Match '(?m)^TRELLO_'
+        $content | Should -Not -Match '(?m)^GMAIL_'
+    }
+
+    It "discloses non-first-party data routing before GTM connection" {
+        $item = Resolve-CatalogItem -CatalogItem $Catalog.googleTagManager -Provider "stape-gtm-remote-oauth"
+        $reasons = @(Get-ProviderApprovalReasons -Item $item)
+
+        ($reasons -join " ") | Should -Match "third-party hosted MCP"
+        ($reasons -join " ") | Should -Match "not first-party"
+    }
+
+    It "uses the selected client's native OAuth step in the Connect result" {
+        $selectionPath = Join-Path $TestDrive "claude-selection.json"
+        $statePath = Join-Path $TestDrive "claude-onboarding-state.json"
+        Set-ConversationSelection -RequestedTools @("clickup") -RequestedClient "Claude" -SelectionFile $selectionPath -SelectionTemplateFile $SelectionExamplePathForTest -CatalogFile $CatalogPathForTest | Out-Null
+
+        $rows = @(Get-ConnectResultRows -SelectionFile $selectionPath -CatalogFile $CatalogPathForTest -CredentialFile (Join-Path $TestDrive ".env.local") -StatePath $statePath -SkipConfigurationCheck)
+
+        $rows[0].Result | Should -Be "Blocked"
+        $rows[0].NextAction | Should -Match 'claude mcp login clickup'
+        $rows[0].NextAction | Should -Not -Match 'codex mcp login'
+    }
+
+    It "keeps wrapped stdio OAuth on the provider browser flow" {
+        $selectionPath = Join-Path $TestDrive "wrapped-oauth-selection.json"
+        $statePath = Join-Path $TestDrive "wrapped-oauth-state.json"
+        Set-ConversationSelection -RequestedTools @("gtm") -RequestedClient "Claude" -SelectionFile $selectionPath -SelectionTemplateFile $SelectionExamplePathForTest -CatalogFile $CatalogPathForTest | Out-Null
+
+        $rows = @(Get-ConnectResultRows -SelectionFile $selectionPath -CatalogFile $CatalogPathForTest -CredentialFile (Join-Path $TestDrive ".env.local") -StatePath $statePath -SkipConfigurationCheck)
+
+        $rows[0].NextAction | Should -Match "provider's browser OAuth flow"
+        $rows[0].NextAction | Should -Not -Match 'claude mcp login'
+    }
+
+    It "does not impose company-only language on a personal OAuth route" {
+        $item = Resolve-CatalogItem -CatalogItem $Catalog.googleTagManager -Provider "stape-gtm-remote-oauth"
+        $reasons = @(Get-ProviderApprovalReasons -Item $item)
+        $disclosure = $reasons -join " "
+
+        $disclosure | Should -Match "selected account data passes through a third-party hosted MCP"
+        $disclosure | Should -Not -Match '(?i)\bcompany\b'
+    }
+
+    It "keeps organizational approval conditional for a managed IAM route" {
+        $item = Resolve-CatalogItem -CatalogItem $Catalog.bigQuery -Provider "google-bigquery-official-remote-mcp"
+        $reasons = @(Get-ProviderApprovalReasons -Item $item -ToolName "bigQuery")
+        $disclosure = $reasons -join " "
+
+        $disclosure | Should -Match "organizational IAM approval may be required"
+        $disclosure | Should -Match "warehouse queries can incur cost"
+    }
+
+    It "lets a ready browser tool progress when GA4 is blocked on credentials" {
+        $selectionPath = Join-Path $TestDrive "tool-selection.json"
+        $envPath = Join-Path $TestDrive ".env.local"
+        $statePath = Join-Path $TestDrive "onboarding-state.json"
+        Set-ConversationSelection -RequestedTools @("ga4", "playwright") -RequestedClient "Codex" -SelectionFile $selectionPath -SelectionTemplateFile $SelectionExamplePathForTest -CatalogFile $CatalogPathForTest | Out-Null
+
+        $rows = @(Get-ConnectResultRows -SelectionFile $selectionPath -CatalogFile $CatalogPathForTest -CredentialFile $envPath -StatePath $statePath -SkipConfigurationCheck)
+
+        ($rows | Where-Object ToolName -eq "googleAnalytics").Result | Should -Be "Blocked"
+        ($rows | Where-Object ToolName -eq "googleAnalytics").NextAction | Should -Match "GoogleAdcLogin"
+        ($rows | Where-Object ToolName -eq "browserQa").Result | Should -Be "Ready to verify"
+    }
+
+    It "resumes GA4 at verification when its local ADC file already exists" {
+        $selectionPath = Join-Path $TestDrive "tool-selection.json"
+        $envPath = Join-Path $TestDrive ".env.local"
+        $statePath = Join-Path $TestDrive "onboarding-state.json"
+        $adcPath = Join-Path $TestDrive "application-default-credentials.json"
+        Set-Content -LiteralPath $adcPath -Value "{}"
+        Set-Content -LiteralPath $envPath -Value "GOOGLE_APPLICATION_CREDENTIALS=$adcPath"
+        Set-ConversationSelection -RequestedTools @("ga4") -RequestedClient "Codex" -SelectionFile $selectionPath -SelectionTemplateFile $SelectionExamplePathForTest -CatalogFile $CatalogPathForTest | Out-Null
+
+        $rows = @(Get-ConnectResultRows -SelectionFile $selectionPath -CatalogFile $CatalogPathForTest -CredentialFile $envPath -StatePath $statePath -SkipConfigurationCheck)
+
+        $rows[0].Result | Should -Be "Ready to verify"
+        $rows[0].NextAction | Should -Match "intended GA4 property"
+
+        Set-ToolEvidenceInternal -RequestedToolName "googleAnalytics" -Provider "googleanalytics-official-adc" -RequestedStage "Verified" -RequestedOutcome "Passed" -RequestedTarget "property 123" -RequestedEvidence "Earlier property identity returned." -StatePath $statePath -SelectionFile $selectionPath
+        Remove-Item -LiteralPath $adcPath
+        $afterRemoval = @(Get-ConnectResultRows -SelectionFile $selectionPath -CatalogFile $CatalogPathForTest -CredentialFile $envPath -StatePath $statePath -SkipConfigurationCheck)
+        $afterRemoval[0].Result | Should -Be "Blocked"
+        $afterRemoval[0].NextAction | Should -Match "GoogleAdcLogin"
+    }
+
+    It "preserves passed evidence across a resumed Connect run" {
+        $selectionPath = Join-Path $TestDrive "tool-selection.json"
+        $statePath = Join-Path $TestDrive "onboarding-state.json"
+        Set-ConversationSelection -RequestedTools @("playwright") -RequestedClient "Codex" -SelectionFile $selectionPath -SelectionTemplateFile $SelectionExamplePathForTest -CatalogFile $CatalogPathForTest | Out-Null
+
+        Set-ToolEvidenceInternal -RequestedToolName "browserQa" -Provider "playwright-official-mcp" -RequestedStage "Verified" -RequestedOutcome "Passed" -RequestedTarget "public page" -RequestedEvidence "Expected page title returned." -StatePath $statePath -SelectionFile $selectionPath
+        Set-ToolEvidenceInternal -RequestedToolName "browserQa" -Provider "playwright-official-mcp" -RequestedStage "Verified" -RequestedOutcome "Pending" -RequestedEvidence "Repeat verification." -StatePath $statePath -SelectionFile $selectionPath -PreservePassed
+
+        $state = Read-OnboardingState -Path $statePath
+        $state["toolEvidence"]["browserQa"]["stages"]["Verified"]["outcome"] | Should -Be "Passed"
+        $state["toolEvidence"]["browserQa"]["stages"]["Verified"]["target"] | Should -Be "public page"
+    }
+
+    It "does not report stale verification when client configuration is missing" {
+        $selectionPath = Join-Path $TestDrive "tool-selection.json"
+        $statePath = Join-Path $TestDrive "onboarding-state.json"
+        Set-ConversationSelection -RequestedTools @("playwright") -RequestedClient "Codex" -SelectionFile $selectionPath -SelectionTemplateFile $SelectionExamplePathForTest -CatalogFile $CatalogPathForTest | Out-Null
+        Set-ToolEvidenceInternal -RequestedToolName "browserQa" -Provider "playwright-official-mcp" -RequestedStage "Verified" -RequestedOutcome "Passed" -RequestedTarget "old public page" -RequestedEvidence "An earlier read-only call passed." -StatePath $statePath -SelectionFile $selectionPath
+        Mock Get-McpConfiguredSummary { [PSCustomObject]@{ AllConfigured = $false } }
+
+        $rows = @(Get-ConnectResultRows -SelectionFile $selectionPath -CatalogFile $CatalogPathForTest -CredentialFile (Join-Path $TestDrive ".env.local") -StatePath $statePath)
+
+        $rows[0].Result | Should -Be "Blocked"
+        $rows[0].NextAction | Should -Match "configure"
+    }
+
+    It "keeps Connect non-mutating until explicit confirmation" {
+        $originalSelectionPath = $SelectionPath
+        $originalTools = $Tools
+        $originalConfirmed = $Confirmed
+        $originalPreview = $Preview
+        try {
+            $script:SelectionPath = Join-Path $TestDrive "existing-selection.json"
+            Set-Content -LiteralPath $script:SelectionPath -Value "{}"
+            $script:Tools = @()
+            $script:Confirmed = $false
+            $script:Preview = $false
+            Mock Invoke-ValidateKit {}
+            Mock Ensure-LocalFiles {}
+            Mock Get-SelectedCatalogItems { @([PSCustomObject]@{ ToolName = "browserQa"; Item = [PSCustomObject]@{ kind = "mcp" } }) }
+            Mock Write-ConnectPlan {}
+            Mock Write-SetupSummary {}
+            Mock Invoke-Prereqs {}
+            Mock Invoke-Apply {}
+
+            Invoke-Connect
+
+            Should -Invoke Write-SetupSummary -Times 1 -Exactly
+            Should -Invoke Invoke-Prereqs -Times 0 -Exactly
+            Should -Invoke Invoke-Apply -Times 0 -Exactly
+        } finally {
+            $script:SelectionPath = $originalSelectionPath
+            $script:Tools = $originalTools
+            $script:Confirmed = $originalConfirmed
+            $script:Preview = $originalPreview
         }
     }
 }

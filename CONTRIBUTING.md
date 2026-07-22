@@ -19,15 +19,15 @@ with analytics tooling.
   it in `SKILL.md`, `AGENTS.md`, or `README.md`.
 - Update `SKILL.md` when changing agent behavior and `README.md` when changing
   user-facing behavior. Keep `AGENTS.md` as a small compatibility entry point.
-- Add behavior tests for config ownership, evidence, reset boundaries, version
-  locks, or client output whenever those areas change.
+- Add first-day acceptance tests for selection, partial completion, scoped
+  credentials, config ownership, evidence resume, and client output whenever
+  those areas change.
 
 ## Pull Requests
 
 Before opening a pull request:
 
-- Run `Validate`, `TestFixtures`, `PesterTests`, `CatalogReview`, and
-  `ReleaseAudit`.
+- Run `Validate`, `PesterTests`, `CatalogReview`, and `ReleaseAudit`.
 - Explain the setup scenario the change improves.
 - Call out any new dependency, permission, credential, or vendor-console
   requirement.

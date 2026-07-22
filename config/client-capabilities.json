@@ -9,6 +9,7 @@
       "supportsRemoteHttp": true,
       "supportsProjectConfig": true,
       "supportsMcpLogin": true,
+      "mcpLoginGuidance": "Run in PowerShell: codex mcp login {serverName}",
       "supportsStaticOAuthClientForRemoteMcp": "limited",
       "restartGuidance": "Restart or reload the Codex session when new MCP servers are not visible after Apply.",
       "notes": "Primary target for this kit. User-scope config is the default; project-scope config is available when installScope is project."
@@ -20,10 +21,11 @@
       ],
       "supportsRemoteHttp": true,
       "supportsProjectConfig": true,
-      "supportsMcpLogin": "client-dependent",
+      "supportsMcpLogin": true,
+      "mcpLoginGuidance": "Run in PowerShell: claude mcp login {serverName}",
       "supportsStaticOAuthClientForRemoteMcp": "client-dependent",
       "restartGuidance": "Restart Claude Code or reload MCP servers after project .mcp.json changes.",
-      "notes": "The kit writes project .mcp.json. Agent-specific CLI commands can still be used when available."
+      "notes": "The kit writes project .mcp.json. Claude Code supports remote HTTP OAuth through claude mcp login or the interactive /mcp panel."
     },
     "geminiCli": {
       "displayName": "Gemini CLI",
@@ -33,10 +35,11 @@
       ],
       "supportsRemoteHttp": true,
       "supportsProjectConfig": true,
-      "supportsMcpLogin": "client-dependent",
+      "supportsMcpLogin": true,
+      "mcpLoginGuidance": "Run inside Gemini CLI: /mcp auth {serverName}",
       "supportsStaticOAuthClientForRemoteMcp": "client-dependent",
       "restartGuidance": "Restart the Gemini CLI session when newly generated MCP servers are not visible.",
-      "notes": "The kit writes settings.json-style MCP config with Gemini's streamable-HTTP httpUrl field; local stdio entries keep the standard command and args fields."
+      "notes": "The kit writes settings.json-style MCP config with Gemini's streamable-HTTP httpUrl field; local stdio entries keep the standard command and args fields. Gemini CLI supports automatic OAuth discovery and interactive /mcp auth."
     }
   }
 }

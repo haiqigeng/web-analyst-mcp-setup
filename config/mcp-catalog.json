@@ -40,7 +40,7 @@
       "GDRIVE_OAUTH_PATH"
     ],
     "authCommand": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\\WebAnalystSetup.ps1 -Action GoogleOAuthFile; powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\\WebAnalystSetup.ps1 -Action RunMcp -ServerName google-drive -Runner npx -Package \"@piotr-agier/google-drive-mcp@latest\" -McpArgs auth; powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\\WebAnalystSetup.ps1 -Action RefreshGoogleDriveToken",
-    "notes": "Default day-one Node path for Google Drive because it is easy to run locally with npx and browser OAuth. Treat this as a Google Workspace MCP, not only Drive storage: it can expose Drive, Docs, Sheets, Slides, and Calendar tools depending on scopes and enabled Google APIs. It is not Google official and can request broad Drive/Docs/Sheets/Slides/Calendar scopes depending on configuration, so use current-company approved OAuth credentials and prefer read-only scopes where possible. Use provider google-drive-official-remote when the selected MCP client and company policy support Google's official remote MCP custom OAuth route.",
+    "notes": "Default day-one Node path for Google Drive because it is easy to run locally with npx and browser OAuth. Treat this as a Google Workspace MCP, not only Drive storage: it can expose Drive, Docs, Sheets, Slides, and Calendar tools depending on scopes and enabled Google APIs. It is not Google official and can request broad Drive/Docs/Sheets/Slides/Calendar scopes depending on configuration, so use OAuth credentials authorized for the intended account and prefer read-only scopes where possible. Use provider google-drive-official-remote when the selected MCP client and applicable organizational policy support Google's official remote MCP custom OAuth route.",
     "testPrompt": "Read-only smoke test: ask for one intended Drive file or folder name or ID, then return only its identity and basic metadata. Test Docs, Sheets, Slides, or Calendar separately only when that capability is needed.",
     "providers": {
       "google-drive-official-remote": {
@@ -77,12 +77,12 @@
           "GOOGLE_PROJECT_ID"
         ],
         "authCommand": null,
-        "notes": "Google's official Drive remote MCP in Developer Preview. Prefer this when the selected MCP client can pass static OAuth client credentials for remote MCP servers and company policy allows it.",
+        "notes": "Google's official Drive remote MCP in Developer Preview. Prefer this when the selected MCP client can pass static OAuth client credentials for remote MCP servers and the user or applicable organizational policy permits it.",
         "testPrompt": "Ask for one intended Drive file or folder name or ID, then return only its identity and basic metadata.",
         "lifecycleStatus": "fallback",
-        "recommendedUse": "First-party Google Drive remote MCP when the selected client supports custom OAuth and company policy requires first-party providers.",
+        "recommendedUse": "First-party Google Drive remote MCP when the selected client supports custom OAuth and the user or applicable organizational policy requires a first-party provider.",
         "fallbackWhen": [
-          "Company requires first-party Google Workspace MCP",
+          "User or organization requires first-party Google Workspace MCP",
           "Selected MCP client supports custom OAuth credentials for remote MCP"
         ],
         "knownLimitations": [
@@ -93,7 +93,7 @@
       }
     },
     "lifecycleStatus": "default",
-    "recommendedUse": "Day-one local Node Google Workspace setup when company-approved OAuth credentials are available.",
+    "recommendedUse": "Day-one local Node Google Workspace setup when OAuth credentials authorized for the intended account are available.",
     "fallbackWhen": [
       "Official remote Google Workspace MCP cannot use custom OAuth credentials in the selected client",
       "The user needs practical browser login on day one"
@@ -140,7 +140,7 @@
       "GOOGLE_ADC_CLIENT_JSON"
     ],
     "authCommand": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\\WebAnalystSetup.ps1 -Action GoogleOAuthFile; powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\\WebAnalystSetup.ps1 -Action RunMcp -ServerName gmail -Runner npx -Package \"@gongrzhe/server-gmail-autoauth-mcp@latest\" -McpArgs auth",
-    "notes": "Default day-one Node path for Gmail because it is easy to run locally with npx and browser OAuth. It is a popular community MCP, not Google official, and currently requests Gmail modify and settings scopes during auth, so treat it as stronger than read-only. Use provider gmail-official-remote when the selected MCP client and company policy support Google's official remote MCP custom OAuth route.",
+    "notes": "Default day-one Node path for Gmail because it is easy to run locally with npx and browser OAuth. It is a popular community MCP, not Google official, and currently requests Gmail modify and settings scopes during auth, so treat it as stronger than read-only. Use provider gmail-official-remote when the selected MCP client and applicable organizational policy support Google's official remote MCP custom OAuth route.",
     "testPrompt": "Read-only smoke test: return at most five label names and no message content.",
     "providers": {
       "gmail-official-remote": {
@@ -177,12 +177,12 @@
           "GOOGLE_PROJECT_ID"
         ],
         "authCommand": null,
-        "notes": "Google's official Gmail remote MCP in Developer Preview. Prefer this when the selected MCP client can pass static OAuth client credentials for remote MCP servers and company policy allows it.",
+        "notes": "Google's official Gmail remote MCP in Developer Preview. Prefer this when the selected MCP client can pass static OAuth client credentials for remote MCP servers and the user or applicable organizational policy permits it.",
         "testPrompt": "Read-only smoke test: return at most five label names and no message content.",
         "lifecycleStatus": "fallback",
-        "recommendedUse": "First-party Gmail remote MCP when the selected client supports custom OAuth and company policy requires first-party providers.",
+        "recommendedUse": "First-party Gmail remote MCP when the selected client supports custom OAuth and the user or applicable organizational policy requires a first-party provider.",
         "fallbackWhen": [
-          "Company requires first-party Gmail MCP",
+          "User or organization requires first-party Gmail MCP",
           "Selected MCP client supports custom OAuth credentials for remote MCP"
         ],
         "knownLimitations": [
@@ -193,7 +193,7 @@
       }
     },
     "lifecycleStatus": "default",
-    "recommendedUse": "Day-one local Node Gmail setup when company-approved OAuth credentials are available.",
+    "recommendedUse": "Day-one local Node Gmail setup when OAuth credentials authorized for the intended account are available.",
     "fallbackWhen": [
       "Official remote Gmail MCP cannot use custom OAuth credentials in the selected client",
       "The user needs practical browser login on day one"
@@ -227,12 +227,12 @@
     ],
     "credentialKeys": [],
     "authCommand": null,
-    "notes": "Personal OAuth mode through Stape's hosted remote GTM MCP. The user signs in with their own Google account. No service-account email is required.",
+    "notes": "User OAuth mode through Stape's hosted remote GTM MCP. The user signs in with the intended Google account. No service-account email is required.",
     "testPrompt": "Read-only smoke test: ask for the intended GTM account or container name or ID, then return only the matching identity and confirm read access. Do not enumerate all accessible accounts or containers.",
     "lifecycleStatus": "default",
-    "recommendedUse": "Fast GTM browser OAuth setup when company policy allows Stape-hosted remote MCP.",
+    "recommendedUse": "Fast GTM browser OAuth setup when the user accepts the disclosed data route and applicable organizational policy permits the Stape-hosted remote MCP.",
     "fallbackWhen": [
-      "No company Google Cloud OAuth setup is ready",
+      "No managed Google Cloud OAuth setup is ready",
       "The user needs quick GTM account/container visibility"
     ],
     "knownLimitations": [
@@ -278,7 +278,7 @@
       "GOOGLE_ADC_CLIENT_JSON"
     ],
     "authCommand": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\\WebAnalystSetup.ps1 -Action GoogleAdcLogin",
-    "notes": "Official Google Analytics MCP. Use user ADC/browser login with the user's own Google account and approved company OAuth credentials when available. Keep this as the only GA4 MCP provider until the user explicitly requests a new one.",
+    "notes": "Official Google Analytics MCP. Use ADC/browser login with the intended Google account and OAuth credentials authorized for that account when available. Keep this as the only GA4 MCP provider until the user explicitly requests a new one.",
     "testPrompt": "Read-only smoke test: ask for the intended GA4 property name or ID, then return only that property's identity or one minimal aggregate for an approved short date range.",
     "lifecycleStatus": "default",
     "recommendedUse": "Official GA4 MCP with Google ADC/browser login.",
@@ -396,12 +396,12 @@
       "BIGQUERY_DATASETS"
     ],
     "authCommand": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\\WebAnalystSetup.ps1 -Action GoogleAdcLogin; powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\\WebAnalystSetup.ps1 -Action BigQueryAdcBearerToken",
-    "notes": "Official remote BigQuery MCP. Prefer company-approved Google Cloud IAM with least-privilege roles such as MCP Tool User, BigQuery Job User, and BigQuery Data Viewer. Use read-only datasets, dry-runs or query limits where possible, and ask for project/dataset IDs before analysis. BigQuery does not use API keys. In Codex, if remote OAuth login fails with dynamic client registration not supported, the day-one short-term option is to generate a short-lived ADC bearer token into BIGQUERY_MCP_ACCESS_TOKEN and configure bearer_token_env_var; this usually expires in about one hour and should be regenerated/reloaded when needed. Long-term fallback: Google MCP Toolbox for Databases when the company needs local control, parameterized tools, or allowlisted queries.",
+    "notes": "Official remote BigQuery MCP. Prefer Google Cloud IAM authorized for the intended project, using least-privilege roles such as MCP Tool User, BigQuery Job User, and BigQuery Data Viewer; when the project or data is organizational, confirm organizational permission. Use read-only datasets, dry-runs or query limits where possible, and ask for project/dataset IDs before analysis. BigQuery does not use API keys. In Codex, if remote OAuth login fails with dynamic client registration not supported, the day-one short-term option is to generate a short-lived ADC bearer token into BIGQUERY_MCP_ACCESS_TOKEN and configure bearer_token_env_var; this usually expires in about one hour and should be regenerated/reloaded when needed. Long-term fallback: Google MCP Toolbox for Databases when the user or organization needs local control, parameterized tools, or allowlisted queries.",
     "testPrompt": "Read-only smoke test: require a confirmed project and dataset first, then return only matching metadata. Do not enumerate other projects or run a query unless its scope and cost guardrail are approved.",
     "lifecycleStatus": "default",
-    "recommendedUse": "Official remote BigQuery MCP with company-approved IAM/OAuth; use short-lived ADC bearer token only as a day-one bridge when remote OAuth is blocked.",
+    "recommendedUse": "Official remote BigQuery MCP with IAM/OAuth authorized for the intended project; use a short-lived ADC bearer token only as a day-one bridge when remote OAuth is blocked.",
     "fallbackWhen": [
-      "Company approves Google Cloud MCP/IAM access",
+      "User or organization permits Google Cloud MCP/IAM access",
       "Need metadata or read-only SQL from BigQuery"
     ],
     "knownLimitations": [
@@ -429,7 +429,7 @@
     "serverName": "clickup",
     "defaultProvider": "clickup-official-remote-oauth",
     "credentialKeys": [],
-    "authCommand": "codex mcp login clickup",
+    "authCommand": null,
     "notes": "Recommended official remote MCP. Use browser OAuth from the MCP client when prompted.",
     "testPrompt": "Read-only smoke test: ask for the intended ClickUp workspace name or ID, then return only the matching workspace identity.",
     "lifecycleStatus": "optional",
@@ -469,7 +469,7 @@
     "notes": "No clear first-party Trello MCP was found. This remains the current third-party candidate.",
     "testPrompt": "Read-only smoke test: ask for the intended Trello board name or ID, then return only the matching board identity.",
     "lifecycleStatus": "candidate",
-    "recommendedUse": "Third-party Trello MCP candidate only when Trello is selected and company policy allows it.",
+    "recommendedUse": "Third-party Trello MCP candidate only when Trello is selected, the user accepts the route, and applicable organizational policy permits it.",
     "fallbackWhen": [
       "No first-party Trello MCP is available and the user needs board visibility"
     ],
@@ -617,7 +617,7 @@
     "credentialKeys": [
       "CONTENTSQUARE_MCP_URL"
     ],
-    "authCommand": "codex mcp login contentsquare",
+    "authCommand": null,
     "notes": "Recommended official Contentsquare MCP. The exact URL is provided inside Contentsquare Analysis setup > Model Context Protocol, and auth is OAuth.",
     "testPrompt": "Read-only smoke test: ask for the intended Contentsquare project name or ID, then return only the matching project identity.",
     "lifecycleStatus": "optional",

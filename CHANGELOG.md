@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased - Utility-first connection flow
+
+- Replaced the multi-command onboarding path with one safe, resumable `Connect` action and a visible Select → Connect → Done journey.
+- Added friendly analyst tool names, default preview behavior, explicit confirmation for machine/client changes, and just-in-time provider-risk disclosure.
+- Scoped `.env.local` to selected provider keys, preserved existing non-empty values, and avoided creating it for a fresh selection that needs no local credentials.
+- Continued ready tools when another selection is blocked, preserved passed evidence across retries, and reduced handover to `generated/setup-summary.md`.
+- Removed dormant profiles, profile schemas, fixture machinery, and the overlapping first-day checklist.
+- Broadened the explicit North Star to any Windows PC and separated device ownership from personal or organizational account governance without adding a setup mode or questionnaire.
+- Made command execution explicitly agent-owned, resolved vague "everything" requests to the smallest outcome-relevant selection, and generated native remote OAuth guidance for Codex, Claude Code, and Gemini CLI.
+- Expanded the suite to 54 tests with utility-focused coverage for selection, credential scoping and reuse, personal and organizational routes, client-native and provider-wrapped OAuth, disclosure, partial success, resume, stale-state handling, and confirmation boundaries.
+
 ## v1.5.0 - Credential isolation and configuration integrity
 
 - Scoped each local MCP process to only the selected tool/provider environment keys, while retaining compatibility with v1.4 launchers that did not record the tool identity.

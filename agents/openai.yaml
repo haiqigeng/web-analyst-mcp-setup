@@ -1,4 +1,4 @@
 interface:
   display_name: "Web Analyst MCP Setup"
-  short_description: "Connect and verify web analyst tools on Windows"
-  default_prompt: "Use $web-analyst-mcp-setup to guide me through safe first-day MCP onboarding for my selected analytics tools."
+  short_description: "Connect analyst tools on any Windows PC"
+  default_prompt: "Use $web-analyst-mcp-setup to set up and verify my selected web analyst tools on this Windows PC."

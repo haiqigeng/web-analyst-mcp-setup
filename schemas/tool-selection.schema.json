@@ -4,7 +4,6 @@
   "type": "object",
   "required": ["aiClients", "installScope", "tools"],
   "properties": {
-    "profile": { "type": "string" },
     "aiClients": {
       "type": "object",
       "required": ["codex", "claudeCode", "geminiCli"],

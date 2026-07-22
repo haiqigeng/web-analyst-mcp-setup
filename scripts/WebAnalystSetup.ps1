@@ -1,12 +1,12 @@
 [CmdletBinding()]
 param(
-    [ValidateSet("Prepare", "UseProfile", "Validate", "Doctor", "CredentialGuide", "BigQuerySafetyPlan", "FirstDayChecklist", "OnboardingReport", "RecordEvidence", "ReleaseAudit", "CatalogReview", "TestFixtures", "PesterTests", "Prereqs", "CheckMcpUpdates", "Generate", "Apply", "Status", "Dashboard", "RunMcp", "GoogleOAuthFile", "GoogleAdcLogin", "RefreshGoogleDriveToken", "BigQueryAdcBearerToken", "ResetKit", "ResetMcpConfig", "ResetCodexMcp", "All")]
+    [ValidateSet("Connect", "Prepare", "Validate", "Doctor", "CredentialGuide", "BigQuerySafetyPlan", "OnboardingReport", "RecordEvidence", "ReleaseAudit", "CatalogReview", "PesterTests", "Prereqs", "CheckMcpUpdates", "Generate", "Apply", "Status", "Dashboard", "RunMcp", "GoogleOAuthFile", "GoogleAdcLogin", "RefreshGoogleDriveToken", "BigQueryAdcBearerToken", "ResetKit", "ResetMcpConfig", "ResetCodexMcp", "All")]
     [string]$Action = "Status",
 
     [ValidateSet("Selected", "All", "Codex", "Claude", "Gemini")]
     [string]$Client = "Selected",
 
-    [string]$Profile,
+    [string[]]$Tools = @(),
     [string]$ServerName,
     [ValidateSet("npx", "pipx")]
     [string]$Runner = "npx",
@@ -22,6 +22,7 @@ param(
     [string]$Target,
     [string]$Evidence,
     [switch]$Preview,
+    [switch]$Confirmed,
     [switch]$AllCatalogProviders,
     [switch]$InstallPython,
     [switch]$ConfirmedMcpEndpointDeletion
@@ -32,7 +33,6 @@ $Root = Resolve-Path (Join-Path $PSScriptRoot "..")
 $SelectionPath = Join-Path $Root "config\tool-selection.json"
 $SelectionExamplePath = Join-Path $Root "config\tool-selection.example.json"
 $CatalogPath = Join-Path $Root "config\mcp-catalog.json"
-$ProfilesPath = Join-Path $Root "config\tool-profiles.json"
 $ClientCapabilitiesPath = Join-Path $Root "config\client-capabilities.json"
 $EnvPath = Join-Path $Root "secrets\.env.local"
 $EnvTemplatePath = Join-Path $Root "secrets\.env.template"
@@ -56,40 +56,6 @@ function Write-Step {
     Write-Host "== $Message"
 }
 
-function Sync-DotEnvTemplateKeys {
-    param([string]$TemplatePath, [string]$TargetPath)
-    if (-not (Test-Path -LiteralPath $TemplatePath) -or -not (Test-Path -LiteralPath $TargetPath)) { return }
-
-    $existing = @{}
-    Get-Content -LiteralPath $TargetPath | ForEach-Object {
-        $line = $_.Trim()
-        if (-not $line -or $line.StartsWith("#")) { return }
-        $idx = $line.IndexOf("=")
-        if ($idx -lt 1) { return }
-        $existing[$line.Substring(0, $idx).Trim()] = $true
-    }
-
-    $missingLines = @()
-    Get-Content -LiteralPath $TemplatePath | ForEach-Object {
-        $line = $_
-        $trimmed = $line.Trim()
-        if (-not $trimmed -or $trimmed.StartsWith("#")) { return }
-        $idx = $trimmed.IndexOf("=")
-        if ($idx -lt 1) { return }
-        $key = $trimmed.Substring(0, $idx).Trim()
-        if (-not $existing.ContainsKey($key)) {
-            $missingLines += $line
-            $existing[$key] = $true
-        }
-    }
-
-    if ($missingLines.Count -gt 0) {
-        Add-Content -LiteralPath $TargetPath -Value ""
-        Add-Content -LiteralPath $TargetPath -Value "# Added from the current web analyst template."
-        Add-Content -LiteralPath $TargetPath -Value $missingLines
-    }
-}
-
 function Ensure-LocalFiles {
     New-Item -ItemType Directory -Force (Join-Path $Root "config") | Out-Null
     New-Item -ItemType Directory -Force (Join-Path $Root "secrets") | Out-Null
@@ -99,11 +65,7 @@ function Ensure-LocalFiles {
         Copy-Item -LiteralPath $SelectionExamplePath -Destination $SelectionPath
         Write-Host "Created config\tool-selection.json."
     }
-    if (-not (Test-Path -LiteralPath $EnvPath)) {
-        Copy-Item -LiteralPath $EnvTemplatePath -Destination $EnvPath
-        Write-Host "Created secrets\.env.local."
-    }
-    Sync-DotEnvTemplateKeys -TemplatePath $EnvTemplatePath -TargetPath $EnvPath
+    Sync-SelectedCredentialFile
 }
 
 function ConvertTo-Hashtable {
@@ -380,23 +342,7 @@ function Invoke-RecordEvidence {
     }
 
     $provider = Get-CurrentToolProvider -RequestedToolName $ToolName
-    $state = Read-OnboardingState
-    if (-not $state["toolEvidence"].ContainsKey($ToolName)) {
-        $state["toolEvidence"][$ToolName] = @{ provider = $provider; stages = @{} }
-    }
-    $toolEntry = $state["toolEvidence"][$ToolName]
-    if ([string]$toolEntry["provider"] -ne $provider) {
-        $toolEntry = @{ provider = $provider; stages = @{} }
-        $state["toolEvidence"][$ToolName] = $toolEntry
-    }
-    if (-not $toolEntry.ContainsKey("stages")) { $toolEntry["stages"] = @{} }
-    $toolEntry["stages"][$Stage] = @{
-        outcome = $Outcome
-        recordedAt = (Get-Date).ToString("o")
-        target = $Target
-        evidence = $Evidence
-    }
-    Write-OnboardingState -State $state
+    Set-ToolEvidenceInternal -RequestedToolName $ToolName -Provider $provider -RequestedStage $Stage -RequestedOutcome $Outcome -RequestedTarget $Target -RequestedEvidence $Evidence
     Write-Host "Recorded $Stage evidence for $ToolName [$provider]: $Outcome"
 }
 
@@ -515,7 +461,7 @@ function Get-ToolStatusRows {
         $nextStep = [string]$item.testPrompt
         if ($enabled -and $missing.Count -gt 0) {
             $status = "Needs credentials"
-            $nextStep = "Collect approved credential values for: " + ($missing -join ", ")
+            $nextStep = "Collect credential values authorized for the intended account: " + ($missing -join ", ")
         } elseif ($enabled -and $item.authMode -eq "none") {
             $status = "Ready to configure"
             $nextStep = "Run Apply, then verify with the lightweight browser test."
@@ -1098,56 +1044,6 @@ function Ensure-GoogleCloudCli {
     }
 }
 
-function Invoke-UseProfile {
-    Ensure-LocalFiles | Out-Null
-    if (-not (Test-Path -LiteralPath $ProfilesPath)) {
-        throw "Missing profile catalog: $ProfilesPath"
-    }
-
-    $profilesRoot = Read-JsonFile -Path $ProfilesPath
-    $availableProfiles = @(Get-PropertyNames -Object $profilesRoot.profiles)
-    if ([string]::IsNullOrWhiteSpace($Profile)) {
-        Write-Step "Available profiles"
-        $availableProfiles | ForEach-Object { Write-Host "  $_" }
-        Write-Host ""
-        Write-Host "Run again with -Profile <name>."
-        return
-    }
-    if ($availableProfiles -notcontains $Profile) {
-        throw "Unknown profile '$Profile'. Available profiles: $($availableProfiles -join ', ')"
-    }
-
-    $profileObject = $profilesRoot.profiles.($Profile)
-    $selection = Read-JsonFile -Path $SelectionPath
-    $catalog = Read-JsonFile -Path $CatalogPath
-
-    foreach ($tool in $selection.tools.PSObject.Properties) {
-        $tool.Value.enabled = $false
-    }
-
-    foreach ($tool in $profileObject.tools.PSObject.Properties) {
-        if (-not (Test-ObjectProperty -Object $catalog -Name $tool.Name)) {
-            throw "Profile '$Profile' references unknown tool '$($tool.Name)'."
-        }
-        if (-not (Test-ObjectProperty -Object $selection.tools -Name $tool.Name)) {
-            $selection.tools | Add-Member -NotePropertyName $tool.Name -NotePropertyValue ([PSCustomObject]@{ enabled = $false; provider = "" })
-        }
-        $selection.tools.($tool.Name).enabled = [bool]$tool.Value.enabled
-        if (Test-ObjectProperty -Object $tool.Value -Name "provider") {
-            $selection.tools.($tool.Name).provider = [string]$tool.Value.provider
-        } elseif (Test-ObjectProperty -Object $catalog.($tool.Name) -Name "defaultProvider") {
-            $selection.tools.($tool.Name).provider = [string]$catalog.($tool.Name).defaultProvider
-        }
-    }
-
-    $selection | Add-Member -NotePropertyName "profile" -NotePropertyValue $Profile -Force
-    Write-JsonFile -Object $selection -Path $SelectionPath
-    Write-Host "Applied profile '$Profile' to config\tool-selection.json."
-    if ($profileObject.description) {
-        Write-Host ([string]$profileObject.description)
-    }
-}
-
 function Invoke-ValidateKit {
     param([switch]$Quiet)
 
@@ -1161,22 +1057,18 @@ function Invoke-ValidateKit {
         ".gitignore",
         "config\mcp-catalog.json",
         "config\tool-selection.example.json",
-        "config\tool-profiles.json",
         "config\client-capabilities.json",
         "secrets\.env.template",
         "scripts\WebAnalystSetup.ps1",
         "scripts\lib\CatalogReview.ps1",
-        "scripts\lib\FirstDayChecklist.ps1",
+        "scripts\lib\Connect.ps1",
         "scripts\lib\PesterTests.ps1",
         "scripts\lib\ReleaseAudit.ps1",
-        "scripts\lib\TestFixtures.ps1",
         "schemas\mcp-catalog.schema.json",
         "schemas\tool-selection.schema.json",
-        "schemas\tool-profiles.schema.json",
         "schemas\client-capabilities.schema.json",
         "schemas\onboarding-state.schema.json",
         "schemas\mcp-version-lock.schema.json",
-        "tests\fixtures\profile-server-names.json",
         "tests\WebAnalystSetup.Tests.ps1",
         "docs\data-and-credential-safety.md",
         "CHANGELOG.md"
@@ -1189,16 +1081,14 @@ function Invoke-ValidateKit {
 
     $catalog = $null
     $selectionExample = $null
-    $profiles = $null
     $clientCapabilities = $null
-    foreach ($relative in @("config\mcp-catalog.json", "config\tool-selection.example.json", "config\tool-profiles.json", "config\client-capabilities.json", "tests\fixtures\profile-server-names.json", "schemas\mcp-catalog.schema.json", "schemas\tool-selection.schema.json", "schemas\tool-profiles.schema.json", "schemas\client-capabilities.schema.json", "schemas\onboarding-state.schema.json", "schemas\mcp-version-lock.schema.json")) {
+    foreach ($relative in @("config\mcp-catalog.json", "config\tool-selection.example.json", "config\client-capabilities.json", "schemas\mcp-catalog.schema.json", "schemas\tool-selection.schema.json", "schemas\client-capabilities.schema.json", "schemas\onboarding-state.schema.json", "schemas\mcp-version-lock.schema.json")) {
         $path = Join-Path $Root $relative
         if (Test-Path -LiteralPath $path) {
             try {
                 $json = Read-JsonFile -Path $path
                 if ($relative -eq "config\mcp-catalog.json") { $catalog = $json }
                 if ($relative -eq "config\tool-selection.example.json") { $selectionExample = $json }
-                if ($relative -eq "config\tool-profiles.json") { $profiles = $json }
                 if ($relative -eq "config\client-capabilities.json") { $clientCapabilities = $json }
             } catch {
                 $errors += "Invalid JSON in $relative`: $($_.Exception.Message)"
@@ -1283,30 +1173,9 @@ function Invoke-ValidateKit {
         }
     }
 
-    if ($profiles -and $catalog) {
-        foreach ($profileEntry in $profiles.profiles.PSObject.Properties) {
-            foreach ($tool in $profileEntry.Value.tools.PSObject.Properties) {
-                if (-not (Test-ObjectProperty -Object $catalog -Name $tool.Name)) {
-                    $errors += "Profile '$($profileEntry.Name)' references unknown tool '$($tool.Name)'."
-                    continue
-                }
-                if (Test-ObjectProperty -Object $tool.Value -Name "provider") {
-                    $providerName = [string]$tool.Value.provider
-                    $catalogItem = $catalog.($tool.Name)
-                    $validProviders = @()
-                    if ($catalogItem.defaultProvider) { $validProviders += [string]$catalogItem.defaultProvider }
-                    if ($catalogItem.providers) { $validProviders += @(Get-PropertyNames -Object $catalogItem.providers) }
-                    if ($providerName -and $validProviders.Count -gt 0 -and $validProviders -notcontains $providerName) {
-                        $errors += "Profile '$($profileEntry.Name)' uses invalid provider '$providerName' for '$($tool.Name)'."
-                    }
-                }
-            }
-        }
-    }
-
     if ($clientCapabilities) {
         foreach ($clientEntry in $clientCapabilities.clients.PSObject.Properties) {
-            foreach ($field in @("displayName", "configTargets", "supportsRemoteHttp", "supportsProjectConfig", "supportsMcpLogin", "restartGuidance", "notes")) {
+            foreach ($field in @("displayName", "configTargets", "supportsRemoteHttp", "supportsProjectConfig", "supportsMcpLogin", "mcpLoginGuidance", "restartGuidance", "notes")) {
                 if (-not (Test-ObjectProperty -Object $clientEntry.Value -Name $field)) {
                     $errors += "Client capability '$($clientEntry.Name)' is missing field '$field'."
                 }
@@ -1421,162 +1290,8 @@ function Invoke-Doctor {
 }
 
 function Invoke-OnboardingReport {
-    New-Item -ItemType Directory -Force $GeneratedDir | Out-Null
-    $reportPath = Join-Path $GeneratedDir "onboarding-report.md"
-    $selectionFile = if (Test-Path -LiteralPath $SelectionPath) { $SelectionPath } else { $SelectionExamplePath }
-    $selection = Read-JsonFile -Path $selectionFile
-    $catalog = Read-JsonFile -Path $CatalogPath
-    $toolRows = @(Get-ToolStatusRows -UseExampleWhenLocalSelectionMissing)
-    $enabledRows = @($toolRows | Where-Object { $_.Enabled })
-    $envMap = Import-DotEnvMap -Path $EnvPath
-    $evidenceState = Read-OnboardingState
-    $generatedAt = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss zzz")
-    $profileName = if (Test-ObjectProperty -Object $selection -Name "profile") { [string]$selection.profile } else { "" }
-    if ([string]::IsNullOrWhiteSpace($profileName)) { $profileName = "custom or not selected" }
-    $selectionSource = if ($profileName -eq "custom or not selected") { "manual/custom tool selection" } else { "profile '$profileName' (manual helper)" }
-
-    $lines = @()
-    $lines += "# Web Analyst Onboarding Report"
-    $lines += ""
-    $lines += "Generated: $generatedAt"
-    $lines += ""
-    $lines += "Selection source: $selectionSource"
-    $lines += ""
-    $lines += "This report intentionally lists credential key names only. It never prints secret values."
-    $lines += ""
-    $lines += "## Generated Files"
-    $lines += ""
-    $lines += "| File | Usage |"
-    $lines += "| --- | --- |"
-    $lines += "| `generated/onboarding-report.md` | User-facing handover summary. |"
-    $lines += "| `generated/first-day-checklist.md` | User-facing next actions and read-only smoke tests. |"
-    $lines += ""
-    $lines += "Internal resume state is also kept for agents/scripts, but it is not a user document."
-    $lines += ""
-    $lines += "## MCP Configuration Status"
-    $lines += ""
-    if ($enabledRows.Count -eq 0) {
-        $lines += "No tools are currently enabled."
-    } else {
-        $lines += "| Tool | Provider | Configured | Authenticated | Visible | Verified | Next Step |"
-        $lines += "| --- | --- | --- | --- | --- | --- | --- |"
-        foreach ($row in $enabledRows) {
-            $lines += "| $($row.DisplayName) | $($row.Provider) | $($row.Configured) | $($row.Authenticated) | $($row.Visible) | $($row.Verified) | $($row.NextStep -replace '\|', '/') |"
-        }
-    }
-
-    $lines += ""
-    $lines += "## Recorded Verification Evidence"
-    $lines += ""
-    $verifiedEvidence = @()
-    foreach ($row in $enabledRows) {
-        if (-not $evidenceState["toolEvidence"].ContainsKey($row.Tool)) { continue }
-        $toolEntry = $evidenceState["toolEvidence"][$row.Tool]
-        if (-not $toolEntry.ContainsKey("stages") -or -not $toolEntry["stages"].ContainsKey("Verified")) { continue }
-        $entry = $toolEntry["stages"]["Verified"]
-        if ([string]$entry["outcome"] -ne "Passed") { continue }
-        $verifiedEvidence += [PSCustomObject]@{
-            Tool = $row.DisplayName
-            Target = [string]$entry["target"]
-            Evidence = [string]$entry["evidence"]
-            Recorded = [string]$entry["recordedAt"]
-        }
-    }
-    if ($verifiedEvidence.Count -eq 0) {
-        $lines += "No passed read-only verification has been recorded yet."
-    } else {
-        $lines += "| Tool | Target | Human-verifiable proof | Recorded |"
-        $lines += "| --- | --- | --- | --- |"
-        foreach ($entry in $verifiedEvidence) {
-            $lines += "| $($entry.Tool) | $($entry.Target -replace '\|', '/') | $($entry.Evidence -replace '\|', '/') | $($entry.Recorded) |"
-        }
-    }
-
-    $lines += ""
-    $lines += "## Credential Keys"
-    $lines += ""
-    $credentialKeys = @()
-    foreach ($row in $enabledRows) {
-        $selectionTool = $selection.tools.($row.Tool)
-        $item = Resolve-CatalogItem -CatalogItem $catalog.($row.Tool) -Provider ([string]$selectionTool.provider)
-        $allKeys = @($item.credentialKeys | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
-        $allKeys += @($item.optionalCredentialKeys | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
-        foreach ($key in $allKeys) {
-            if (-not [string]::IsNullOrWhiteSpace([string]$key)) { $credentialKeys += [string]$key }
-        }
-    }
-    $credentialKeys = @($credentialKeys | Select-Object -Unique | Sort-Object)
-    if ($credentialKeys.Count -eq 0) {
-        $lines += "No credential keys are required by the selected tools."
-    } else {
-        $lines += "| Key | State |"
-        $lines += "| --- | --- |"
-        foreach ($key in $credentialKeys) {
-            $state = "missing or not needed yet"
-            if ($envMap.ContainsKey($key) -and -not [string]::IsNullOrWhiteSpace($envMap[$key])) {
-                $state = "present in local env file"
-            } elseif (-not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($key, "User")) -or -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($key, "Process"))) {
-                $state = "present in environment"
-            }
-            $lines += "| $key | $state |"
-        }
-    }
-
-    $lines += ""
-    $lines += "## Safe Smoke Tests"
-    $lines += ""
-    if ($enabledRows.Count -eq 0) {
-        $lines += "No smoke tests to run yet."
-    } else {
-        foreach ($row in $enabledRows) {
-            $selectionTool = $selection.tools.($row.Tool)
-            $item = Resolve-CatalogItem -CatalogItem $catalog.($row.Tool) -Provider ([string]$selectionTool.provider)
-            $smokeTest = if ($item) { [string]$item.testPrompt } else { [string]$row.NextStep }
-            $lines += "- $($row.DisplayName): $smokeTest"
-        }
-    }
-
-    $lines += ""
-    $lines += "## Handover Notes"
-    $lines += ""
-    $lines += "- Keep local credentials and tokens after a real onboarding so daily tools keep working."
-    $lines += "- Run `ResetKit` only after a test, when leaving a client/company, or before sharing the reusable folder."
-    $lines += "- Confirm before using write-capable MCPs, costly BigQuery queries, or browser tools on sensitive logged-in pages."
-    $lines += "- During MCP setup, delete or publish actions related to MCP endpoints require explicit approval and an exact target ID/name."
-
-    Set-Content -LiteralPath $reportPath -Value $lines -Encoding UTF8
-    $state = Read-OnboardingState
-    $state["generatedAt"] = $generatedAt
-    $state["profile"] = $profileName
-    $state["sourceSelectionFile"] = $selectionFile.Substring($Root.Path.Length + 1)
-    $state["selectedTools"] = @($enabledRows | ForEach-Object {
-            [PSCustomObject]@{
-                tool = $_.Tool
-                displayName = $_.DisplayName
-                provider = $_.Provider
-                kind = $_.Kind
-                runtime = $_.Runtime
-                auth = $_.Auth
-                credentialState = $_.CredentialState
-                status = $_.Status
-                configured = $_.Configured
-                authenticated = $_.Authenticated
-                visible = $_.Visible
-                verified = $_.Verified
-                nextStep = $_.NextStep
-            }
-        })
-    $state["credentialKeys"] = @($credentialKeys)
-    $state["reminders"] = @(
-        "Keep local credentials and tokens after a real onboarding so daily tools keep working.",
-        "Run ResetKit only after a test, when leaving a client/company, or before sharing the reusable folder.",
-        "Confirm before using write-capable MCPs, costly BigQuery queries, or browser tools on sensitive logged-in pages.",
-        "During MCP setup, delete or publish actions related to MCP endpoints require explicit approval and an exact target ID/name."
-    )
-    Write-OnboardingState -State $state
-    Invoke-FirstDayChecklist
-    Write-Host "Wrote onboarding report: $reportPath"
-    Write-Host "Updated onboarding evidence/resume state: $OnboardingStatePath"
+    Write-Warning "OnboardingReport is retained for compatibility. Connect now produces the single setup summary."
+    Write-SetupSummary | Out-Null
 }
 
 function Get-SelectedCatalogItems {
@@ -1636,6 +1351,8 @@ function Get-PrerequisiteNeeds {
 }
 
 function Invoke-Prereqs {
+    param([switch]$NoReport)
+
     $selectedItems = @(Get-SelectedCatalogItems)
     $needs = Get-PrerequisiteNeeds -SelectedItems $selectedItems -IncludePython ([bool]$InstallPython)
 
@@ -1671,7 +1388,7 @@ function Invoke-Prereqs {
 
     if ($needs.NeedsPython) { Ensure-PythonAndPipx }
     if ($needs.NeedsGcloud) { Ensure-GoogleCloudCli }
-    Invoke-CheckMcpUpdates
+    Invoke-CheckMcpUpdates -NoReport:$NoReport
 }
 
 function New-McpUpdateResult {
@@ -1773,6 +1490,8 @@ function Write-McpUpdateReport {
 }
 
 function Invoke-CheckMcpUpdates {
+    param([switch]$NoReport)
+
     $selectedItems = if ($AllCatalogProviders) { @(Get-AllCatalogMcpItems) } else { @(Get-SelectedCatalogItems | Where-Object { $_.Item.kind -eq "mcp" }) }
     $envMap = Import-DotEnvMap -Path $EnvPath
     $rows = @()
@@ -1885,7 +1604,7 @@ function Invoke-CheckMcpUpdates {
     Write-Host (($rows | Format-Table -AutoSize | Out-String -Width 240).TrimEnd())
     Write-VersionLock -Lock $lock
     Write-Host "Wrote exact MCP package lock: $VersionLockPath"
-    Write-McpUpdateReport -Rows $rows
+    if (-not $NoReport) { Write-McpUpdateReport -Rows $rows }
 }
 
 function Get-GoogleApiLibraryUrl {
@@ -2000,8 +1719,8 @@ function Invoke-CredentialGuide {
 
     $lines += "## Conversation Steps"
     $lines += ""
-    $lines += "1. Use company-approved credentials or vault items first."
-    $lines += "2. If Google OAuth credentials are missing and the company permits a new project, open the project selector URL, create/select the project, then enable only the APIs listed above."
+    $lines += "1. Use credentials or vault items authorized for the intended account first."
+    $lines += "2. If Google OAuth credentials are missing and the account owner or applicable organizational policy permits a new project, open the project selector URL, create/select the project, then enable only the APIs listed above."
     $lines += "3. Configure Google Auth Platform only when the selected route needs Google OAuth client credentials. Create a Desktop/installed-app OAuth client unless the selected MCP documentation explicitly requires another client type."
     $lines += "4. Copy only the client ID/secret values into ignored local setup, or point the kit to an ignored OAuth JSON file. Do not paste secrets into reusable docs."
     $lines += "5. For BigQuery, request project/dataset IDs and least-privilege IAM separately from OAuth scopes."
@@ -2075,7 +1794,7 @@ function Invoke-BigQuerySafetyPlan {
     $lines += ""
     $lines += "- No project or dataset ID has been confirmed."
     $lines += "- Query scans wildcard, unpartitioned, or unknown-size tables."
-    $lines += "- Estimated bytes exceed the local/company guardrail."
+    $lines += "- Estimated bytes exceed the user- or organization-set guardrail."
     $lines += "- Query writes, creates, exports, loads, deletes, updates, merges, or calls procedures."
     $lines += "- Query touches personal data or sensitive customer data beyond the stated task."
 
@@ -2212,6 +1931,8 @@ function Get-EffectiveStartArgs {
 }
 
 function Get-EnabledMcpServers {
+    param([switch]$SkipUnavailable)
+
     Ensure-LocalFiles | Out-Null
     $selection = Get-Content -Raw -LiteralPath $SelectionPath | ConvertFrom-Json
     $catalog = Get-Content -Raw -LiteralPath $CatalogPath | ConvertFrom-Json
@@ -2250,12 +1971,23 @@ function Get-EnabledMcpServers {
             $requiredScopes = @($item.requiredScopes) | Where-Object { $null -ne $_ -and "$_".Length -gt 0 }
         }
 
+        $lockedPackage = ""
+        try {
+            $lockedPackage = [string](Resolve-LockedPackageSpec -ToolName $tool.Name -Item $item)
+        } catch {
+            if ($SkipUnavailable) {
+                Write-Warning "Skipping $($tool.Name): $($_.Exception.Message)"
+                continue
+            }
+            throw
+        }
+
         $servers += [PSCustomObject]@{
             ToolName = $tool.Name
             ServerName = [string]$item.serverName
             Transport = $transport
             Runner = $runner
-            Package = [string](Resolve-LockedPackageSpec -ToolName $tool.Name -Item $item)
+            Package = $lockedPackage
             Url = $url
             StartArgs = $startArgs
             RequiredScopes = $requiredScopes
@@ -2618,7 +2350,12 @@ function Invoke-Generate {
 }
 
 function Invoke-Apply {
-    $servers = @(Get-EnabledMcpServers)
+    param(
+        [object[]]$ServersOverride,
+        [switch]$NoGeneratedFiles
+    )
+
+    $servers = if ($PSBoundParameters.ContainsKey("ServersOverride")) { @($ServersOverride) } else { @(Get-EnabledMcpServers) }
     if ($servers.Count -eq 0) { throw "No enabled MCP servers are ready to apply." }
 
     $codexToml = New-CodexToml -Servers $servers
@@ -2670,7 +2407,7 @@ function Invoke-Apply {
         return
     }
 
-    Invoke-Generate
+    if (-not $NoGeneratedFiles) { Invoke-Generate }
     foreach ($plan in $plans) {
         $directory = Split-Path -Parent $plan.Path
         if ($directory) { New-Item -ItemType Directory -Force $directory | Out-Null }
@@ -2698,6 +2435,12 @@ function Invoke-Apply {
         Write-OwnershipState -State $ownership
         Write-Host "Updated $($plan.Client) config: $($plan.Path)"
         if ($backup) { Write-Host "Backup: $backup" }
+    }
+
+    $targetLabel = @($targetClients) -join ", "
+    foreach ($server in $servers) {
+        $provider = [string]$selection.tools.($server.ToolName).provider
+        Set-ToolEvidenceInternal -RequestedToolName $server.ToolName -Provider $provider -RequestedStage "Configured" -RequestedOutcome "Passed" -RequestedTarget $targetLabel -RequestedEvidence "MCP configuration saved with ownership protection and a recoverable backup." -PreservePassed
     }
 }
 
@@ -2730,11 +2473,11 @@ function Invoke-Status {
         if ($item.authMode -eq "user_oauth_remote") { $status = "Ready; browser OAuth from MCP client" }
         if ($item.authMode -eq "company_oauth_remote") { $status = "Ready; remote OAuth/IAM from MCP client" }
         if ($item.authMode -eq "static_oauth_client") { $status = "Needs MCP client OAuth client support" }
-        if ($item.authMode -eq "company_oauth_browser") { $status = "Needs company OAuth client or browser auth" }
+        if ($item.authMode -eq "company_oauth_browser") { $status = "Needs OAuth client or browser auth" }
         if ($item.authMode -eq "application_default_credentials" -or $item.authMode -eq "company_oauth_adc") { $status = "Needs Google ADC login if credentials missing" }
         if ($item.authMode -eq "api_header") { $status = "API header credentials present" }
         if ($item.authMode -eq "api_token") { $status = "API token credentials present" }
-        if ($item.authMode -eq "service_account") { $status = "Needs approved service-account credentials" }
+        if ($item.authMode -eq "service_account") { $status = "Needs service-account credentials authorized for the intended resource" }
         if ($missing.Count -gt 0) { $status = "Needs credentials: " + ($missing -join ", ") }
 
         if ($missing.Count -eq 0 -and $tool.Name -eq "googleDrive" -and $item.authMode -eq "company_oauth_browser") {
@@ -2820,6 +2563,7 @@ function Invoke-Dashboard {
     $selection = Get-Content -Raw -LiteralPath $SelectionPath | ConvertFrom-Json
     $catalog = Get-Content -Raw -LiteralPath $CatalogPath | ConvertFrom-Json
     $envMap = Import-DotEnvMap -Path $EnvPath
+    $targetClients = @(Resolve-TargetClients -Selection $selection -RequestedClient "Selected")
     $textRows = @()
     $commandLines = @()
 
@@ -2848,24 +2592,24 @@ function Invoke-Dashboard {
             $note = "Use the MCP client's OAuth/login command. Sign in with your own account."
         }
         if ($item.authMode -eq "company_oauth_remote") {
-            $status = "Company OAuth/IAM"
-            $note = "Use the MCP client's remote-login flow with company Google Cloud access; confirm project, dataset, and IAM roles first."
+            $status = "OAuth/IAM"
+            $note = "Use the MCP client's remote-login flow with access authorized for the intended Google Cloud project; confirm project, dataset, IAM roles, and applicable organizational permission first."
         }
         if ($tool.Name -eq "bigQuery") {
             $status = "BigQuery auth choice"
-            $note = "Official recommendation: remote MCP with company Google Cloud OAuth/IAM. Codex day-one workaround: run BigQueryAdcBearerToken to set a short-lived ADC bearer token, then restart/reload Codex and test with a dry-run read-only query."
+            $note = "Official recommendation: remote MCP with OAuth/IAM authorized for the intended Google Cloud project. Codex day-one workaround: run BigQueryAdcBearerToken to set a short-lived ADC bearer token, then restart/reload Codex and test with a dry-run read-only query."
         }
         if ($item.authMode -eq "static_oauth_client") {
             $status = "OAuth client required"
             $note = "Create an OAuth client ID/secret in Google Auth Platform and configure it in an MCP client that supports static OAuth client credentials. Codex simple login currently fails dynamic registration."
         }
         if ($item.authMode -eq "company_oauth_browser") {
-            $status = "Company OAuth"
-            $note = "Paste the approved company Google client ID/secret, then run GoogleOAuthFile and the browser auth command."
+            $status = "Browser OAuth"
+            $note = "Provide the OAuth client ID/secret authorized for the intended account, then run GoogleOAuthFile and the browser auth command."
         }
         if ($item.authMode -eq "application_default_credentials" -or $item.authMode -eq "company_oauth_adc") {
             $status = "Google ADC"
-            $note = "Prefer the approved company Google client ID/secret; run GoogleAdcLogin to create ADC by browser login."
+            $note = "Prefer a Google client ID/secret authorized for the intended account; run GoogleAdcLogin to create ADC by browser login."
         }
         if ($item.authMode -eq "api_header") {
             $status = "API header"
@@ -2877,7 +2621,7 @@ function Invoke-Dashboard {
         }
         if ($item.authMode -eq "service_account") {
             $status = "Service account"
-            $note = "Use only with company approval; add the service-account email to the target property with the minimum role."
+            $note = "Use only with the account owner's approval and, for organizational resources, organizational permission; add the service-account email to the target property with the minimum role."
         }
         if ($item.kind -eq "api") { $note = [string]$item.notes }
         if ($missing.Count -gt 0) {
@@ -2890,10 +2634,10 @@ function Invoke-Dashboard {
             $tokenPath = $envMap["GDRIVE_CREDENTIALS_PATH"]
             if ($oauthPath -and -not (Test-Path -LiteralPath $oauthPath)) {
                 $status = "Needs OAuth JSON"
-                $note = "Run GoogleOAuthFile after saving GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET, or set GOOGLE_ADC_CLIENT_JSON to an approved OAuth JSON file."
+                $note = "Run GoogleOAuthFile after saving GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET, or set GOOGLE_ADC_CLIENT_JSON to an OAuth JSON file authorized for the intended account."
             } elseif ($tokenPath -and -not (Test-Path -LiteralPath $tokenPath)) {
                 $status = "Needs browser auth"
-                $note = "Run the Google Drive auth command below and sign in with your company Google account."
+                $note = "Run the Google Drive auth command below and sign in with the intended Google account."
             } elseif ($tokenPath -and (Test-Path -LiteralPath $tokenPath)) {
                 $status = "Token present"
                 $note = "Run Status to check token scope/API reachability, then test Drive."
@@ -2905,10 +2649,10 @@ function Invoke-Dashboard {
             $tokenPath = $envMap["GMAIL_CREDENTIALS_PATH"]
             if ($oauthPath -and -not (Test-Path -LiteralPath $oauthPath)) {
                 $status = "Needs OAuth JSON"
-                $note = "Run GoogleOAuthFile after saving GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET, or set GOOGLE_ADC_CLIENT_JSON to an approved OAuth JSON file."
+                $note = "Run GoogleOAuthFile after saving GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET, or set GOOGLE_ADC_CLIENT_JSON to an OAuth JSON file authorized for the intended account."
             } elseif ($tokenPath -and -not (Test-Path -LiteralPath $tokenPath)) {
                 $status = "Needs browser auth"
-                $note = "Run the Gmail auth command below and sign in with your company Google account."
+                $note = "Run the Gmail auth command below and sign in with the intended Google account."
             } elseif ($tokenPath -and (Test-Path -LiteralPath $tokenPath)) {
                 $status = "Token present"
                 $note = "Run Status to check token scope/API reachability, then test Gmail."
@@ -2943,8 +2687,10 @@ function Invoke-Dashboard {
                     $canShowAuthCommand = $false
                 }
                 if ($url -and -not $item.authCommand -and $item.authMode -ne "static_oauth_client") {
-                    $loginCommand = "codex mcp login $($item.serverName)"
-                    $commandLines += "$($item.displayName): $loginCommand"
+                    foreach ($targetClient in $targetClients) {
+                        $loginGuidance = Get-ClientMcpLoginGuidance -ClientName $targetClient -RequestedServerName ([string]$item.serverName)
+                        $commandLines += "$($item.displayName) ($targetClient): $loginGuidance"
+                    }
                 }
             } elseif ($item.package) {
                 $lockedPackage = Resolve-LockedPackageSpec -ToolName $tool.Name -Item $item -AllowUnlocked
@@ -3257,11 +3003,7 @@ function Set-RunMcpEnvironment {
 
     $selectedValues = @{}
     foreach ($key in $allowedKeys) {
-        if ($envMap.ContainsKey($key)) {
-            $selectedValues[$key] = [string]$envMap[$key]
-        } else {
-            $selectedValues[$key] = [Environment]::GetEnvironmentVariable($key, "Process")
-        }
+        $selectedValues[$key] = Get-EffectiveCredentialValue -EnvMap $envMap -Key ([string]$key)
     }
 
     foreach ($key in $managedKeys) {
@@ -3434,15 +3176,15 @@ function Invoke-RunMcp {
 
 function Invoke-WebAnalystSetupMain {
 switch ($Action) {
+    "Connect" {
+        Invoke-Connect
+    }
     "Prepare" {
         Ensure-LocalFiles
         Write-Host "Prepared local config files:"
         Write-Host "  $SelectionPath"
-        Write-Host "  $EnvPath"
-        Write-Host "Edit them through the agent conversation, then run -Action Prereqs or -Action Dashboard."
-    }
-    "UseProfile" {
-        Invoke-UseProfile
+        if (Test-Path -LiteralPath $EnvPath) { Write-Host "  $EnvPath" }
+        Write-Host "Use -Action Connect to preview and continue setup."
     }
     "Validate" {
         Invoke-ValidateKit
@@ -3456,9 +3198,6 @@ switch ($Action) {
     "BigQuerySafetyPlan" {
         Invoke-BigQuerySafetyPlan
     }
-    "FirstDayChecklist" {
-        Invoke-FirstDayChecklist
-    }
     "OnboardingReport" {
         Invoke-OnboardingReport
     }
@@ -3470,9 +3209,6 @@ switch ($Action) {
     }
     "CatalogReview" {
         Invoke-CatalogReview
-    }
-    "TestFixtures" {
-        Invoke-TestFixtures
     }
     "PesterTests" {
         Invoke-PesterTests
@@ -3526,12 +3262,8 @@ switch ($Action) {
         Invoke-RunMcp
     }
     "All" {
-        Ensure-LocalFiles
-        Invoke-Doctor
-        Invoke-Prereqs
-        Invoke-CheckMcpUpdates
-        Invoke-Apply
-        Invoke-Dashboard
+        Write-Warning "All is deprecated. It now uses the safe, resumable Connect flow."
+        Invoke-Connect
     }
 }
 }

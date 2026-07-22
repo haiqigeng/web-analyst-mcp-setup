@@ -60,7 +60,7 @@ function Invoke-CatalogReview {
                 $warnings += "$($providerEntry.ToolName)/$($providerEntry.ProviderName) is Python-based. Confirm there is no credible Node or remote first-day option."
             }
             if ($item.officialness -match "third-party" -and $item.riskLevel -eq "high") {
-                $warnings += "$($providerEntry.ToolName)/$($providerEntry.ProviderName) is third-party and high risk. Confirm company approval before use."
+                $warnings += "$($providerEntry.ToolName)/$($providerEntry.ProviderName) is third-party and high risk. Confirm user approval and, for organizational data or accounts, organizational permission before use."
             }
             if ($item.lifecycleStatus -eq "default" -and @($item.knownLimitations).Count -eq 0) {
                 $warnings += "$($providerEntry.ToolName)/$($providerEntry.ProviderName) is a default provider but has no known limitations documented."

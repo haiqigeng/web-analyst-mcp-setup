@@ -43,7 +43,6 @@ jobs:
         run: |
           npx --yes ajv-cli@5.0.0 validate --spec=draft2020 -s .\schemas\mcp-catalog.schema.json -d .\config\mcp-catalog.json
           npx --yes ajv-cli@5.0.0 validate --spec=draft2020 -s .\schemas\tool-selection.schema.json -d .\config\tool-selection.example.json
-          npx --yes ajv-cli@5.0.0 validate --spec=draft2020 -s .\schemas\tool-profiles.schema.json -d .\config\tool-profiles.json
           npx --yes ajv-cli@5.0.0 validate --spec=draft2020 -s .\schemas\client-capabilities.schema.json -d .\config\client-capabilities.json
           npx --yes ajv-cli@5.0.0 compile --spec=draft2020 -s .\schemas\onboarding-state.schema.json
           npx --yes ajv-cli@5.0.0 compile --spec=draft2020 -s .\schemas\mcp-version-lock.schema.json
@@ -52,11 +51,6 @@ jobs:
         shell: pwsh
         run: |
           .\scripts\WebAnalystSetup.ps1 -Action Validate
-
-      - name: Run fixture tests
-        shell: pwsh
-        run: |
-          .\scripts\WebAnalystSetup.ps1 -Action TestFixtures
 
       - name: Run Pester tests
         shell: pwsh
@@ -93,6 +87,7 @@ jobs:
             "config/tool-selection.json",
             "generated/mcp.json",
             "generated/codex.config-snippet.toml",
+            "generated/setup-summary.md",
             "generated/onboarding-report.md",
             "generated/onboarding-state.json",
             "generated/mcp-version-lock.json",
@@ -101,7 +96,6 @@ jobs:
             "generated/bigquery-safety-plan.md",
             "generated/mcp-update-check.md",
             "generated/catalog-review.md",
-            "generated/fixture-test-report.md",
             "generated/release-audit.md",
             ".mcp.json",
             ".codex/config.toml",

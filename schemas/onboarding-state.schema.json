@@ -7,7 +7,6 @@
     "version": { "const": 2 },
     "updatedAt": { "type": "string" },
     "generatedAt": { "type": "string" },
-    "profile": { "type": "string" },
     "sourceSelectionFile": { "type": "string" },
     "selectedTools": { "type": "array" },
     "credentialKeys": {
