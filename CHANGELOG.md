@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased - Utility-first connection flow
+## v1.6.0 - Utility-first connection flow
 
 - Replaced the multi-command onboarding path with one safe, resumable `Connect` action and a visible Select → Connect → Done journey.
 - Added friendly analyst tool names, default preview behavior, explicit confirmation for machine/client changes, and just-in-time provider-risk disclosure.

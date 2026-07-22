@@ -4,7 +4,7 @@
 [![Latest release](https://img.shields.io/github/v/release/haiqigeng/web-analyst-mcp-setup?sort=semver)](https://github.com/haiqigeng/web-analyst-mcp-setup/releases/latest)
 [![License](https://img.shields.io/github/license/haiqigeng/web-analyst-mcp-setup)](LICENSE)
 
-Version: 1.6.0-dev
+Version: 1.6.0
 
 A Windows-first skill for connecting the tools a web analyst needs on a personal or organization-managed PC.
 
